@@ -1427,7 +1427,6 @@ function App() {
   const [renameBrandOpen, setRenameBrandOpen] = useState(false)
   const [missingSuppliesOpen, setMissingSuppliesOpen] = useState(false)
   const [missingTab, setMissingTab] = useState('inks')
-  const [missingSummaryExpanded, setMissingSummaryExpanded] = useState(true)
   const [missingExpandedBrands, setMissingExpandedBrands] = useState({})
   const [missingExpandedFamilies, setMissingExpandedFamilies] = useState({})
   const [referenceImportOpen, setReferenceImportOpen] = useState(false)
@@ -1518,7 +1517,6 @@ function App() {
       setBrandFeedback('')
       setMissingSuppliesOpen(false)
       setMissingTab('inks')
-      setMissingSummaryExpanded(true)
       setMissingExpandedBrands({})
       setMissingExpandedFamilies({})
       setReferenceImportOpen(false)
@@ -3054,38 +3052,37 @@ function App() {
                           </span>
                         </button>
 
-                        <div className="flex flex-wrap items-center justify-end gap-2 px-4 py-3">
-                          <button
-                            type="button"
-                            onClick={() => openAddSupply(manageTab, brand)}
-                            className="rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-2 py-1 text-xs text-[#5e4a7f] hover:bg-[#ece2fa]"
-                          >
-                            {manageTab === 'inks'
-                              ? '+ Add Ink'
-                              : manageTab === 'cardstock'
-                                ? '+ Add Cardstock'
-                                : manageTab === 'paints'
-                                  ? '+ Add Paint'
-                                  : '+ Add Marker'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openRenameBrand(brand)}
-                            className="rounded-md border border-[#e8e0d8] px-2 py-1 text-xs text-[#6b5b4f] hover:bg-[#f5ede6]"
-                          >
-                            Rename Brand
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => deleteBrandForActiveTab(brand)}
-                            className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
-                          >
-                            Delete Brand
-                          </button>
-                        </div>
-
                         {isBrandOpen ? (
                           <div className="space-y-3 border-t border-[#f0e8df] p-4 pt-3">
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => openAddSupply(manageTab, brand)}
+                                className="rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-2 py-1 text-xs text-[#5e4a7f] hover:bg-[#ece2fa]"
+                              >
+                                {manageTab === 'inks'
+                                  ? '+ Add Ink'
+                                  : manageTab === 'cardstock'
+                                    ? '+ Add Cardstock'
+                                    : manageTab === 'paints'
+                                      ? '+ Add Paint'
+                                      : '+ Add Marker'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => openRenameBrand(brand)}
+                                className="rounded-md border border-[#e8e0d8] px-2 py-1 text-xs text-[#6b5b4f] hover:bg-[#f5ede6]"
+                              >
+                                Rename Brand
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => deleteBrandForActiveTab(brand)}
+                                className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+                              >
+                                Delete Brand
+                              </button>
+                            </div>
                             {brandFamilies.length === 0 ? (
                               <div className="rounded-lg border border-dashed border-[#d9cfc4] p-3 text-xs text-[#8b7b6b]">
                                 No collections for this brand yet.
@@ -3795,56 +3792,42 @@ function App() {
                 </button>
               ))}
             </div>
-            <div className="rounded-lg border border-[#e2d8f0] bg-[#f7f2fc] px-3 py-2 text-sm text-[#5e4a7f]">
-              {missingSuppliesReport.totalMissing > 0
-                ? `Looks like you're still missing ${missingSuppliesReport.totalMissing} of ${missingSuppliesReport.totalExpected} reference-catalog colors.`
-                : `Amazing! You have it all. (${missingSuppliesReport.totalExpected}/${missingSuppliesReport.totalExpected})`}
-            </div>
             {missingSuppliesReport.brands.length === 0 ? (
               <div className="rounded-lg border border-dashed border-[#d9cfc4] p-4 text-sm text-[#8b7b6b]">
                 No reference catalog saved for this tab yet. Use "Import Reference Text" or "Save Current as Reference" first.
               </div>
             ) : (
               <>
-                <div className="rounded-lg border border-[#e8e0d8] bg-white">
-                  <button
-                    type="button"
-                    onClick={() => setMissingSummaryExpanded((value) => !value)}
-                    className="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-[#faf7f4]"
-                  >
-                    <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Missing by Brand</p>
-                    <span className="text-xs text-[#8b7b6b]">{missingSummaryExpanded ? 'Hide' : 'Show'}</span>
-                  </button>
-                  {missingSummaryExpanded ? (
-                    <div className="flex flex-wrap gap-2 border-t border-[#e8e0d8] px-3 py-2">
-                      {missingSuppliesReport.brands.map((brandGroup) => (
-                        <span
-                          key={`missing-summary-${brandGroup.brand}`}
-                          className={`rounded-full border px-2.5 py-1 text-xs ${
-                            brandGroup.needsReference
-                              ? 'border-amber-200 bg-amber-50 text-amber-800'
-                              : brandGroup.missingCount > 0
-                                ? 'border-[#d7c7ee] bg-[#f4eefc] text-[#5e4a7f]'
-                                : 'border-[#cfe8d2] bg-[#e9f8ec] text-[#386244]'
-                          }`}
-                        >
-                          {brandGroup.needsReference
-                            ? `${brandGroup.brand}: no reference catalog yet`
+                <div className="overflow-hidden rounded-lg border border-[#d7c7ee] bg-[#f7f2fc]">
+                  <div className="border-b border-[#e6daf7] bg-[#ede3fb] px-3 py-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[#6a5788]">Missing by Brand</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2 px-3 py-2">
+                    {missingSuppliesReport.brands.map((brandGroup) => (
+                      <span
+                        key={`missing-summary-${brandGroup.brand}`}
+                        className={`rounded-full border px-2.5 py-1 text-xs ${
+                          brandGroup.needsReference
+                            ? 'border-amber-200 bg-amber-50 text-amber-800'
                             : brandGroup.missingCount > 0
-                              ? `${brandGroup.brand}: missing ${brandGroup.missingCount} / ${brandGroup.total}`
-                              : `${brandGroup.brand}: ${brandGroup.total} / ${brandGroup.total} complete`}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
+                              ? 'border-[#d7c7ee] bg-[#f4eefc] text-[#5e4a7f]'
+                              : 'border-[#cfe8d2] bg-[#e9f8ec] text-[#386244]'
+                        }`}
+                      >
+                        {brandGroup.needsReference
+                          ? `${brandGroup.brand}: no reference catalog yet`
+                          : brandGroup.missingCount > 0
+                            ? `${brandGroup.brand}: missing ${brandGroup.missingCount} / ${brandGroup.total}`
+                            : `${brandGroup.brand}: ${brandGroup.total} / ${brandGroup.total} complete`}
+                      </span>
+                    ))}
+                  </div>
                 </div>
                 {missingSuppliesReport.brands.map((brandGroup) => (
                   <div key={brandGroup.brand} className="rounded-xl border border-[#e8e0d8] bg-white">
                     {(() => {
                       const brandKey = `${missingTab}::${brandGroup.brand}`
-                      const isExpanded =
-                        missingExpandedBrands[brandKey] ??
-                        Boolean(brandGroup.needsReference || brandGroup.missingCount > 0)
+                      const isExpanded = Boolean(missingExpandedBrands[brandKey])
                       return (
                         <>
                           <button
