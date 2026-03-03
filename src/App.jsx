@@ -851,21 +851,21 @@ function HeaderBar({
 }) {
   return (
     <header className="sticky top-0 z-40 border-b border-[#a89cc5] bg-[#e0d5f0] px-3 py-3 md:px-6 md:py-4">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2">
-        <div className="min-w-0">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3 md:gap-5">
           <h1 className="font-display flex min-w-0 items-center gap-2 text-lg font-semibold text-[#3f3254] sm:text-xl md:text-3xl">
             <span>🎨</span>
             <span className="hidden truncate sm:inline">Palette Studio</span>
             <span className="sm:hidden">Studio</span>
           </h1>
-          <div className="mt-2 inline-flex rounded-xl border border-[#b7a7d1] bg-[#d6c8ec] p-1">
+          <div className="inline-flex rounded-xl border border-white/50 bg-white/35 p-1 shadow-inner shadow-[#c0b1d8]/70">
             <button
               type="button"
               onClick={() => onChangeWorkspaceMode('palette')}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium md:px-4 md:text-sm ${
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all md:px-4 md:text-sm ${
                 workspaceMode === 'palette'
-                  ? 'bg-[#a58bc4] text-[#3f3254]'
-                  : 'text-[#5f5276] hover:bg-[#cabbe0]'
+                  ? 'bg-gradient-to-r from-[#b9a0d7] to-[#a186c6] text-[#352948] shadow-sm'
+                  : 'text-[#5f5276] hover:bg-white/60'
               }`}
             >
               Palette Studio
@@ -873,10 +873,10 @@ function HeaderBar({
             <button
               type="button"
               onClick={() => onChangeWorkspaceMode('stencil')}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium md:px-4 md:text-sm ${
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all md:px-4 md:text-sm ${
                 workspaceMode === 'stencil'
-                  ? 'bg-[#a58bc4] text-[#3f3254]'
-                  : 'text-[#5f5276] hover:bg-[#cabbe0]'
+                  ? 'bg-gradient-to-r from-[#b9a0d7] to-[#a186c6] text-[#352948] shadow-sm'
+                  : 'text-[#5f5276] hover:bg-white/60'
               }`}
             >
               Stencil Studio
@@ -884,7 +884,7 @@ function HeaderBar({
           </div>
         </div>
 
-        <div className="flex w-full flex-wrap items-center justify-end gap-1 sm:w-auto md:gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <button
             onClick={onOpenCloudSync}
             className="flex items-center gap-1 rounded-lg border border-[#a89cc5] bg-[#b8a5d0] px-2 py-2 text-xs font-medium text-[#3f3254] transition-all hover:bg-[#a89cc5] md:gap-2 md:rounded-xl md:px-4 md:text-sm"
