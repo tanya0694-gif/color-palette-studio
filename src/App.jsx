@@ -3,6 +3,7 @@ import { supabase, supabaseConfigured } from './lib/supabase'
 
 const STORAGE_KEY = 'palette-studio-data'
 const AUTO_CLOUD_SYNC_KEY = 'palette-studio-auto-cloud-sync'
+const MASTER_LISTS_KEY = 'palette-studio-master-lists'
 
 const DEFAULT_DATA = {
   palettes: [],
@@ -371,6 +372,13 @@ function mergeUniqueByName(existing, incoming) {
   return [...map.values()]
 }
 
+function normalizeNameKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+}
+
 function parseSuppliesTextImport(text) {
   const lines = String(text)
     .split(/\r?\n|\u2028|\u2029/g)
@@ -488,6 +496,33 @@ function loadData() {
     return normalizeData(JSON.parse(raw))
   } catch {
     return DEFAULT_DATA
+  }
+}
+
+function normalizeMasterLists(raw) {
+  const base = { inks: [], cardstock: [], paints: [], markers: [] }
+  if (!raw || typeof raw !== 'object') return base
+  for (const key of Object.keys(base)) {
+    const source = Array.isArray(raw[key]) ? raw[key] : []
+    base[key] = source
+      .map((item) => ({
+        brand: String(item?.brand || '').trim(),
+        family: String(item?.family || '').trim(),
+        name: String(item?.name || '').trim(),
+        hex: normalizeHex(item?.hex) || '',
+      }))
+      .filter((item) => item.brand && item.family && item.name && item.hex)
+  }
+  return base
+}
+
+function loadMasterLists() {
+  try {
+    const raw = localStorage.getItem(MASTER_LISTS_KEY)
+    if (!raw) return normalizeMasterLists(null)
+    return normalizeMasterLists(JSON.parse(raw))
+  } catch {
+    return normalizeMasterLists(null)
   }
 }
 
@@ -1384,6 +1419,7 @@ function SupabaseAuthPanel({
 
 function App() {
   const [data, setData] = useState(loadData)
+  const [masterLists, setMasterLists] = useState(loadMasterLists)
   const [dataMenuOpen, setDataMenuOpen] = useState(false)
   const [activeCollection, setActiveCollection] = useState('')
   const [paletteSearch, setPaletteSearch] = useState('')
@@ -1414,6 +1450,7 @@ function App() {
   const [recipeModalOpen, setRecipeModalOpen] = useState(false)
   const [supplyEditOpen, setSupplyEditOpen] = useState(false)
   const [renameBrandOpen, setRenameBrandOpen] = useState(false)
+  const [missingSuppliesOpen, setMissingSuppliesOpen] = useState(false)
   const [authEmailInput, setAuthEmailInput] = useState('')
   const [authUserEmail, setAuthUserEmail] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
@@ -1496,6 +1533,7 @@ function App() {
   useEffect(() => {
     if (!manageSuppliesOpen) {
       setBrandFeedback('')
+      setMissingSuppliesOpen(false)
     }
   }, [manageSuppliesOpen])
 
@@ -1510,6 +1548,14 @@ function App() {
       // ignore
     }
   }, [autoCloudSyncEnabled])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(MASTER_LISTS_KEY, JSON.stringify(masterLists))
+    } catch {
+      // ignore
+    }
+  }, [masterLists])
 
   useEffect(() => {
     if (authCooldownSeconds <= 0) return
@@ -2231,6 +2277,49 @@ function App() {
         }
       })
   }, [manageItems, manageTab])
+  const missingSuppliesReport = useMemo(() => {
+    const masterItems = Array.isArray(masterLists?.[manageTab]) ? masterLists[manageTab] : []
+    if (!masterItems.length) {
+      return { brands: [], totalMissing: 0, totalExpected: 0 }
+    }
+
+    const missingItems = masterItems.filter((item) => {
+      const targetHex = normalizeHex(item.hex)
+      const targetName = normalizeNameKey(item.name)
+      const targetBrand = String(item.brand || '').toLowerCase()
+      return !manageItems.some((existing) => {
+        if (String(existing.brand || '').toLowerCase() !== targetBrand) return false
+        const existingHex = normalizeHex(existing.hex)
+        const existingName = normalizeNameKey(existing.name)
+        return (targetHex && existingHex === targetHex) || existingName === targetName
+      })
+    })
+
+    const byBrand = missingItems.reduce((acc, item) => {
+      const brand = String(item.brand || 'Unknown Brand').trim()
+      const family = String(item.family || 'Uncategorized').trim()
+      if (!acc[brand]) acc[brand] = {}
+      if (!acc[brand][family]) acc[brand][family] = []
+      acc[brand][family].push(item)
+      return acc
+    }, {})
+
+    const brands = Object.entries(byBrand)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([brand, families]) => ({
+        brand,
+        missingCount: Object.values(families).reduce((sum, items) => sum + items.length, 0),
+        families: Object.entries(families)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([family, items]) => ({ family, items })),
+      }))
+
+    return {
+      brands,
+      totalMissing: missingItems.length,
+      totalExpected: masterItems.length,
+    }
+  }, [manageItems, manageTab, masterLists])
   const supplyFormBrandFamilies = useMemo(() => {
     const brand = String(supplyEditForm.brand || '').trim()
     if (!brand) return []
@@ -2504,6 +2593,27 @@ function App() {
         error instanceof Error ? `Starter pack failed: ${error.message}` : 'Starter pack install failed.',
       )
     }
+  }
+
+  function saveCurrentTabAsMasterList() {
+    const source = Array.isArray(manageItems) ? manageItems : []
+    const snapshot = source
+      .map((item) => ({
+        brand: String(item.brand || '').trim(),
+        family: String(item.family || '').trim(),
+        name: String(item.name || '').trim(),
+        hex: normalizeHex(item.hex) || '',
+      }))
+      .filter((item) => item.brand && item.family && item.name && item.hex)
+
+    setMasterLists((prev) => ({ ...prev, [manageTab]: snapshot }))
+    setBrandFeedback(`Saved ${snapshot.length} ${manageTab} items as your master list.`)
+  }
+
+  function clearCurrentTabMasterList() {
+    setMasterLists((prev) => ({ ...prev, [manageTab]: [] }))
+    setMissingSuppliesOpen(false)
+    setBrandFeedback(`Cleared master list for ${manageTab}.`)
   }
 
   async function sendMagicLink() {
@@ -2811,62 +2921,38 @@ function App() {
             </div>
 
             <div className="space-y-4 p-6">
-              {starterPacksForTab.length ? (
-                <div className="rounded-xl border border-[#e2d8f0] bg-[#f7f2fc] p-4">
+              <div className="rounded-xl border border-[#e2d8f0] bg-[#f7f2fc] p-4">
+                <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Master List</p>
+                <p className="text-xs text-[#9a8d80]">
+                  Save your current {manageTab} as the reference list, then check what is still missing.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={toggleStarterPacksExpanded}
-                    className="flex w-full items-center justify-between rounded-lg text-left hover:bg-[#f2eafc]"
+                    onClick={saveCurrentTabAsMasterList}
+                    className="rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
                   >
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                        Starter Packs
-                      </p>
-                      <p className="text-xs text-[#9a8d80]">
-                        One-click installs ({starterPacksForTab.length} available)
-                      </p>
-                    </div>
-                    <span className="text-xs font-medium text-[#8b7b6b]">
-                      {starterPacksExpandedByTab[manageTab] ? 'Hide' : 'Show'}
-                    </span>
+                    Save Current as Master
                   </button>
-
-                  {starterPacksExpandedByTab[manageTab] ? (
-                    <div className="mt-3 space-y-2">
-                      {starterPacksForTab.map((pack) => {
-                        const fullyInstalled = pack.itemCount > 0 && pack.installedCount >= pack.itemCount
-                        return (
-                          <div
-                            key={pack.id}
-                            className="flex flex-col gap-2 rounded-lg border border-[#ebe2d8] bg-white p-3 md:flex-row md:items-center md:justify-between"
-                          >
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-medium text-[#5c4a3d]">{pack.label}</p>
-                              <p className="text-xs text-[#8b7b6b]">
-                                {pack.itemCount} items
-                                {pack.brand ? ` • ${pack.brand}` : ''}
-                                {pack.installedCount ? ` • ${pack.installedCount} already installed` : ''}
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => installStarterPack(pack)}
-                              disabled={Boolean(pack.broken)}
-                              className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
-                                fullyInstalled
-                                  ? 'border-[#d7c7ee] bg-[#f4eefc] text-[#5e4a7f] hover:bg-[#ece2fa]'
-                                  : 'border-[#d9cfc4] bg-white text-[#6b5b4f] hover:bg-[#f5ede6]'
-                              } disabled:cursor-not-allowed disabled:opacity-60`}
-                            >
-                              {fullyInstalled ? 'Reinstall / Merge' : 'Install'}
-                            </button>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => setMissingSuppliesOpen(true)}
+                    className="rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
+                  >
+                    What's Missing
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearCurrentTabMasterList}
+                    className="rounded-md border border-[#e8e0d8] bg-white px-3 py-1.5 text-xs font-medium text-[#6b5b4f] hover:bg-[#f5ede6]"
+                  >
+                    Clear Master
+                  </button>
                 </div>
-              ) : null}
+                <p className="mt-2 text-xs text-[#8b7b6b]">
+                  Master size: {(Array.isArray(masterLists?.[manageTab]) ? masterLists[manageTab].length : 0)} items
+                </p>
+              </div>
 
               <div className={`grid grid-cols-1 gap-2 ${visibleBrands.length === 0 ? 'md:grid-cols-2' : ''}`}>
                 {visibleBrands.length === 0 ? (
@@ -3630,6 +3716,74 @@ function App() {
             </ModalShell>
           )
         })()
+      ) : null}
+
+      {missingSuppliesOpen ? (
+        <ModalShell
+          title={`What's Missing (${manageTab[0].toUpperCase()}${manageTab.slice(1)})`}
+          onClose={() => setMissingSuppliesOpen(false)}
+          width="max-w-2xl"
+          footer={
+            <div className="flex justify-end">
+              <button
+                onClick={() => setMissingSuppliesOpen(false)}
+                className="rounded-xl bg-[#a58bc4] px-5 py-2.5 font-medium text-[#3f3254] hover:bg-[#9678b8]"
+              >
+                Close
+              </button>
+            </div>
+          }
+        >
+          <div className="space-y-3">
+            <div className="rounded-lg border border-[#e2d8f0] bg-[#f7f2fc] px-3 py-2 text-sm text-[#5e4a7f]">
+              Missing {missingSuppliesReport.totalMissing} of {missingSuppliesReport.totalExpected} master-list colors.
+            </div>
+            {missingSuppliesReport.totalExpected === 0 ? (
+              <div className="rounded-lg border border-dashed border-[#d9cfc4] p-4 text-sm text-[#8b7b6b]">
+                No master list saved for this tab yet. Use "Save Current as Master" in Manage Supplies first.
+              </div>
+            ) : missingSuppliesReport.totalMissing === 0 ? (
+              <div className="rounded-lg border border-[#cfe8d2] bg-[#e9f8ec] p-4 text-sm text-[#386244]">
+                You're complete. All master-list colors are present in this tab.
+              </div>
+            ) : (
+              missingSuppliesReport.brands.map((brandGroup) => (
+                <div key={brandGroup.brand} className="rounded-xl border border-[#e8e0d8] bg-white">
+                  <div className="border-b border-[#eee5db] px-4 py-3">
+                    <p className="text-sm font-semibold text-[#5c4a3d]">{brandGroup.brand}</p>
+                    <p className="text-xs text-[#8b7b6b]">
+                      {brandGroup.missingCount} missing
+                    </p>
+                  </div>
+                  <div className="space-y-3 px-4 py-3">
+                    {brandGroup.families.map(({ family, items }) => (
+                      <div key={`${brandGroup.brand}-${family}`} className="rounded-lg border border-[#ebe2d8] bg-[#fcfbf9] p-3">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">{family}</p>
+                        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          {items.map((item) => (
+                            <div
+                              key={`${brandGroup.brand}-${family}-${item.name}-${item.hex}`}
+                              className="flex items-center gap-2 rounded-lg border border-[#ebe2d8] bg-white px-2.5 py-2"
+                            >
+                              <div
+                                className="h-6 w-6 rounded-md border-2 border-white shadow-sm ring-1 ring-black/10"
+                                style={{ backgroundColor: normalizeHex(item.hex) || '#000000' }}
+                              />
+                              <div className="min-w-0">
+                                <p className="truncate text-sm text-[#5c4a3d]">{item.name}</p>
+                                <p className="font-mono text-xs text-[#8b7b6b]">{normalizeHex(item.hex) || item.hex}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </ModalShell>
       ) : null}
 
       {newCollectionOpen ? (
