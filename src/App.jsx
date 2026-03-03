@@ -313,8 +313,13 @@ function estimateDominantGridAngle(img) {
   ctx.drawImage(img, 0, 0, width, height)
   const { data } = ctx.getImageData(0, 0, width, height)
   const gray = new Float32Array(width * height)
+  const sat = new Float32Array(width * height)
   for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
-    gray[p] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
+    const r = data[i]
+    const g = data[i + 1]
+    const b = data[i + 2]
+    gray[p] = 0.299 * r + 0.587 * g + 0.114 * b
+    sat[p] = Math.max(r, g, b) - Math.min(r, g, b)
   }
 
   const bins = 181
@@ -324,6 +329,7 @@ function estimateDominantGridAngle(img) {
   for (let y = 1; y < height - 1; y += 1) {
     for (let x = 1; x < width - 1; x += 1) {
       const i = y * width + x
+      if (sat[i] < 14 && gray[i] > 226) continue
       const gx =
         -gray[i - width - 1] +
         gray[i - width + 1] +
@@ -614,9 +620,33 @@ function createTwoLayerPatternMasks(img, { detail = 6, invert = false, rotationD
   const fillSatThreshold = Math.max(32, percentile(satValues, 0.45))
   const fillVeryLowSat = Math.max(14, percentile(satValues, 0.2))
   const passes = detail >= 7 ? 1 : 2
+  const supportMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
+  const supportExpandPasses = detail >= 8 ? 4 : 5
+
+  for (let i = 0; i < source.data.length; i += 4) {
+    const r = source.data[i]
+    const g = source.data[i + 1]
+    const b = source.data[i + 2]
+    const a = source.data[i + 3]
+    const max = Math.max(r, g, b)
+    const min = Math.min(r, g, b)
+    const light = (max + min) / 2
+    const sat = max === 0 ? 0 : ((max - min) / max) * 255
+    const inSupport =
+      a >= 15 &&
+      (sat >= fillSatThreshold ||
+        (sat >= fillVeryLowSat + 8 && light <= brightThreshold - 10))
+    const value = inSupport ? 0 : 255
+    supportMask.data[i] = value
+    supportMask.data[i + 1] = value
+    supportMask.data[i + 2] = value
+    supportMask.data[i + 3] = 255
+  }
+  dilateBinaryMask(supportMask, supportExpandPasses)
 
   const outlineMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
   const fillMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
+  let outlinePixelCount = 0
 
   for (let i = 0; i < source.data.length; i += 4) {
     const r = source.data[i]
@@ -641,7 +671,8 @@ function createTwoLayerPatternMasks(img, { detail = 6, invert = false, rotationD
     const light = (max + min) / 2
     const sat = max === 0 ? 0 : ((max - min) / max) * 255
 
-    const isLikelyOutline = light >= brightThreshold && sat <= lowSatThreshold * 1.15
+    const inSupport = supportMask.data[i] < 128
+    const isLikelyOutline = inSupport && light >= brightThreshold && sat <= lowSatThreshold * 1.15
     const isLikelyFill = sat >= fillSatThreshold && !(light >= brightThreshold && sat <= fillVeryLowSat)
 
     let outlineValue = isLikelyOutline ? 0 : 255
@@ -655,6 +686,7 @@ function createTwoLayerPatternMasks(img, { detail = 6, invert = false, rotationD
     outlineMask.data[i + 1] = outlineValue
     outlineMask.data[i + 2] = outlineValue
     outlineMask.data[i + 3] = 255
+    if (outlineValue === 0) outlinePixelCount += 1
 
     fillMask.data[i] = fillValue
     fillMask.data[i + 1] = fillValue
@@ -664,6 +696,16 @@ function createTwoLayerPatternMasks(img, { detail = 6, invert = false, rotationD
 
   smoothBinaryMask(outlineMask, passes)
   smoothBinaryMask(fillMask, passes)
+  // If outline became too sparse, relax one step by borrowing support edges.
+  if (outlinePixelCount < width * height * 0.002) {
+    for (let i = 0; i < outlineMask.data.length; i += 4) {
+      const softened = supportMask.data[i] < 128 ? 0 : 255
+      outlineMask.data[i] = softened
+      outlineMask.data[i + 1] = softened
+      outlineMask.data[i + 2] = softened
+      outlineMask.data[i + 3] = 255
+    }
+  }
   // Close small interior holes so motifs stay solid for cutter paths.
   dilateBinaryMask(fillMask, 1)
   erodeBinaryMask(fillMask, 1)
