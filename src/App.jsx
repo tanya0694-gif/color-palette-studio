@@ -1426,6 +1426,7 @@ function App() {
   const [supplyEditOpen, setSupplyEditOpen] = useState(false)
   const [renameBrandOpen, setRenameBrandOpen] = useState(false)
   const [missingSuppliesOpen, setMissingSuppliesOpen] = useState(false)
+  const [missingExpandedFamilies, setMissingExpandedFamilies] = useState({})
   const [referenceImportOpen, setReferenceImportOpen] = useState(false)
   const [authEmailInput, setAuthEmailInput] = useState('')
   const [authUserEmail, setAuthUserEmail] = useState('')
@@ -1513,6 +1514,7 @@ function App() {
     if (!manageSuppliesOpen) {
       setBrandFeedback('')
       setMissingSuppliesOpen(false)
+      setMissingExpandedFamilies({})
       setReferenceImportOpen(false)
       setReferenceImportError('')
       setReferenceImportMode('replace')
@@ -3776,30 +3778,52 @@ function App() {
                       <p className="text-xs text-[#8b7b6b]">{brandGroup.missingCount} missing</p>
                     </div>
                     <div className="space-y-3 px-4 py-3">
-                      {brandGroup.families.map(({ family, items }) => (
-                        <div key={`${brandGroup.brand}-${family}`} className="rounded-lg border border-[#ebe2d8] bg-[#fcfbf9] p-3">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">{family}</p>
-                          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                            {items.map((item) => (
-                              <div
-                                key={`${brandGroup.brand}-${family}-${item.name}-${item.hex}`}
-                                className="flex items-center gap-2 rounded-lg border border-[#ebe2d8] bg-white px-2.5 py-2"
-                              >
-                                <div
-                                  className="h-6 w-6 rounded-md border-2 border-white shadow-sm ring-1 ring-black/10"
-                                  style={{ backgroundColor: normalizeHex(item.hex) || '#000000' }}
-                                />
-                                <div className="min-w-0">
-                                  <p className="truncate text-sm text-[#5c4a3d]">{item.name}</p>
-                                  <p className="font-mono text-xs text-[#8b7b6b]">{normalizeHex(item.hex) || item.hex}</p>
-                                </div>
+                    {brandGroup.families.map(({ family, items }) => (
+                      (() => {
+                        const familyKey = `${manageTab}::${brandGroup.brand}::${family}`
+                        const isExpanded = Boolean(missingExpandedFamilies[familyKey])
+                        return (
+                          <div key={`${brandGroup.brand}-${family}`} className="rounded-lg border border-[#ebe2d8] bg-[#fcfbf9]">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setMissingExpandedFamilies((prev) => ({
+                                  ...prev,
+                                  [familyKey]: !prev[familyKey],
+                                }))
+                              }
+                              className="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-[#f7f2ec]"
+                            >
+                              <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                                {family} ({items.length})
+                              </p>
+                              <span className="text-xs text-[#8b7b6b]">{isExpanded ? 'Hide' : 'Show'}</span>
+                            </button>
+                            {isExpanded ? (
+                              <div className="grid grid-cols-1 gap-2 border-t border-[#ebe2d8] p-3 sm:grid-cols-2">
+                                {items.map((item) => (
+                                  <div
+                                    key={`${brandGroup.brand}-${family}-${item.name}-${item.hex}`}
+                                    className="flex items-center gap-2 rounded-lg border border-[#ebe2d8] bg-white px-2.5 py-2"
+                                  >
+                                    <div
+                                      className="h-6 w-6 rounded-md border-2 border-white shadow-sm ring-1 ring-black/10"
+                                      style={{ backgroundColor: normalizeHex(item.hex) || '#000000' }}
+                                    />
+                                    <div className="min-w-0">
+                                      <p className="truncate text-sm text-[#5c4a3d]">{item.name}</p>
+                                      <p className="font-mono text-xs text-[#8b7b6b]">{normalizeHex(item.hex) || item.hex}</p>
+                                    </div>
+                                  </div>
+                                ))}
                               </div>
-                            ))}
+                            ) : null}
                           </div>
-                        </div>
-                      ))}
-                    </div>
+                        )
+                      })()
+                    ))}
                   </div>
+                </div>
                 ))}
               </>
             )}
