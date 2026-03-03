@@ -3944,6 +3944,25 @@ function App() {
           }
         >
           <div className="space-y-3">
+            <div className="flex flex-wrap gap-2 rounded-lg border border-[#e8e0d8] bg-white p-2">
+              {['inks', 'cardstock', 'paints', 'markers'].map((tab) => (
+                <button
+                  key={`reference-tab-${tab}`}
+                  type="button"
+                  onClick={() => {
+                    setManageTab(tab)
+                    setReferenceImportError('')
+                  }}
+                  className={`rounded-full px-3 py-1.5 text-xs font-medium ${
+                    manageTab === tab
+                      ? 'bg-[#a58bc4] text-[#3f3254]'
+                      : 'text-[#8b7b6b] hover:bg-[#f5ede6]'
+                  }`}
+                >
+                  {tab[0].toUpperCase() + tab.slice(1)}
+                </button>
+              ))}
+            </div>
             <div className="rounded-lg border border-[#e2d8f0] bg-[#f7f2fc] px-3 py-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-[#5e4a7f]">
