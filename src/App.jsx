@@ -1871,9 +1871,9 @@ function StencilStudioPanel({
 
   return (
     <main className="flex-1 w-full max-w-7xl self-center overflow-auto px-4 py-4 md:px-6 md:py-6">
-      <section className="rounded-2xl border border-[#e8e0d8] bg-white/75 p-4 shadow-sm md:rounded-3xl md:p-6">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
+      <section className="rounded-2xl border border-[#d7c7ee] bg-[#f2ecfb] p-4 shadow-sm md:rounded-3xl md:p-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#d7c7ee] bg-[#e8dff5] px-4 py-3">
+          <div className="min-w-0">
             <h2 className="font-display text-2xl font-semibold text-[#3f3254] md:text-3xl">Stencil Studio</h2>
             <p className="text-sm text-[#7f7468]">
               Upload an image, tune the cutoff, and export stencil-ready SVG vectors.
@@ -1948,7 +1948,7 @@ function StencilStudioPanel({
                 <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                   Output Mode
                 </label>
-                <div className="inline-flex flex-wrap rounded-lg border border-[#d9cfc4] bg-white p-1">
+                <div className="inline-flex flex-wrap rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-1">
                   <button
                     type="button"
                     onClick={() => onUpdateSetting('mode', 'multi')}
@@ -1966,7 +1966,7 @@ function StencilStudioPanel({
                     className={`rounded-md px-3 py-1 text-xs font-medium ${
                       stencilSettings.mode === 'pattern'
                         ? 'bg-[#a58bc4] text-[#3f3254]'
-                        : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                        : 'text-[#6b5b4f] hover:bg-white'
                     }`}
                   >
                     Repeat Pattern Stencils
@@ -1980,7 +1980,7 @@ function StencilStudioPanel({
                     <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                       Export Size
                     </label>
-                    <div className="inline-flex rounded-lg border border-[#d9cfc4] bg-white p-1">
+                    <div className="inline-flex rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-1">
                       <button
                         type="button"
                         onClick={() => onUpdateSetting('exportSize', 'source')}
@@ -2096,7 +2096,7 @@ function StencilStudioPanel({
           </aside>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div className="rounded-xl border border-[#e8e0d8] bg-white p-4">
+            <div className="rounded-xl border border-[#d7c7ee] bg-[#fcf9ff] p-4">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Preview</p>
               {stencilImagePreviewUrl ? (
                 <img
@@ -2111,7 +2111,7 @@ function StencilStudioPanel({
               )}
             </div>
 
-            <div className="rounded-xl border border-[#e8e0d8] bg-white p-4">
+            <div className="rounded-xl border border-[#d7c7ee] bg-[#fcf9ff] p-4">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                 Thresholded Raster
               </p>
@@ -2130,7 +2130,7 @@ function StencilStudioPanel({
           </div>
         </div>
 
-        <div className="mt-4 rounded-xl border border-[#e8e0d8] bg-white p-4">
+        <div className="mt-4 rounded-xl border border-[#d7c7ee] bg-[#fcf9ff] p-4">
           <div className="mb-2 flex items-center justify-between gap-2">
             <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Vector Output</p>
             <p className="text-xs text-[#9a8d80]">
@@ -2155,7 +2155,7 @@ function StencilStudioPanel({
         </div>
 
         {stencilLayers.length > 0 ? (
-          <div className="mt-4 rounded-xl border border-[#e8e0d8] bg-white p-4">
+          <div className="mt-4 rounded-xl border border-[#d7c7ee] bg-[#fcf9ff] p-4">
             <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
               Generated Layers
             </p>
@@ -2183,7 +2183,7 @@ function StencilStudioPanel({
         ) : null}
 
         {stencilLibrary.length > 0 ? (
-          <div className="mt-4 rounded-xl border border-[#e8e0d8] bg-white p-4">
+          <div className="mt-4 rounded-xl border border-[#d7c7ee] bg-[#fcf9ff] p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
               <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Saved Stencil Library</p>
               <p className="text-xs text-[#9a8d80]">{stencilLibrary.length} saved</p>
