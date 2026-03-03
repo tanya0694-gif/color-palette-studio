@@ -1906,7 +1906,6 @@ function StencilStudioPanel({
           onClick={() => setOpen((value) => !value)}
           onBlur={() => setOpen(false)}
           className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[#b9a9d4] bg-[#f4eefc] text-[10px] font-semibold leading-none text-[#6a5986] hover:bg-[#ece2fa]"
-          title={text}
           aria-label={text}
         >
           ?
