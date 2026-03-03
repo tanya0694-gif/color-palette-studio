@@ -2920,7 +2920,7 @@ function App() {
                           className="flex w-full items-center justify-between rounded-t-xl border-b border-[#e6daf7] bg-[#f4eefc] p-4 text-left hover:bg-[#ede3fb]"
                         >
                           <div className="min-w-0 flex-1 pr-3">
-                            <p className="font-display truncate text-2xl leading-none text-[#5e4a7f]">{brand}</p>
+                            <p className="font-display truncate text-xl leading-tight text-[#5e4a7f] md:text-2xl">{brand}</p>
                             <p className="mt-2 text-xs text-[#8b7b6b]">
                               {brandFamilies.length} collections • {brandItems.length} {manageTab}
                             </p>
@@ -2928,7 +2928,7 @@ function App() {
                           <span className="text-sm text-[#8b7b6b]">{isBrandOpen ? '−' : '+'}</span>
                         </button>
 
-                        <div className="flex flex-wrap items-center justify-end gap-2 px-4 pb-3">
+                        <div className="flex flex-wrap items-center justify-end gap-2 px-4 py-3">
                           <button
                             type="button"
                             onClick={() => openAddSupply(manageTab, brand)}
