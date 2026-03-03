@@ -1456,6 +1456,7 @@ function App() {
   const [importStatus, setImportStatus] = useState('')
   const [referenceImportText, setReferenceImportText] = useState('')
   const [referenceImportError, setReferenceImportError] = useState('')
+  const [referenceImportMode, setReferenceImportMode] = useState('replace')
   const [renameBrandForm, setRenameBrandForm] = useState({ oldName: '', newName: '' })
   const [supplyEditForm, setSupplyEditForm] = useState({
     mode: 'edit',
@@ -1514,6 +1515,7 @@ function App() {
       setMissingSuppliesOpen(false)
       setReferenceImportOpen(false)
       setReferenceImportError('')
+      setReferenceImportMode('replace')
     }
   }, [manageSuppliesOpen])
 
@@ -2579,6 +2581,24 @@ function App() {
       const importedBrands = [...new Set(importedItems.map((item) => item.brand.toLowerCase()))]
       setMasterLists((prev) => {
         const existing = Array.isArray(prev?.[manageTab]) ? prev[manageTab] : []
+        if (referenceImportMode === 'append') {
+          const byKey = new Map(
+            existing.map((item) => [
+              `${String(item.brand || '').toLowerCase()}::${normalizeNameKey(item.name)}::${normalizeHex(item.hex) || ''}`,
+              item,
+            ]),
+          )
+          importedItems.forEach((item) => {
+            const key = `${String(item.brand || '').toLowerCase()}::${normalizeNameKey(item.name)}::${
+              normalizeHex(item.hex) || ''
+            }`
+            byKey.set(key, item)
+          })
+          return {
+            ...prev,
+            [manageTab]: [...byKey.values()],
+          }
+        }
         const kept = existing.filter((item) => !importedBrands.includes(String(item.brand || '').toLowerCase()))
         return {
           ...prev,
@@ -2589,7 +2609,9 @@ function App() {
       setReferenceImportText('')
       setReferenceImportOpen(false)
       setBrandFeedback(
-        `Reference catalog updated (${importedItems.length} ${manageTab} items across ${importedBrands.length} brand${
+        `Reference catalog ${referenceImportMode === 'append' ? 'appended' : 'updated'} (${
+          importedItems.length
+        } ${manageTab} items across ${importedBrands.length} brand${
           importedBrands.length === 1 ? '' : 's'
         }).`,
       )
@@ -2914,10 +2936,11 @@ function App() {
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={() => {
-                        setReferenceImportError('')
-                        setReferenceImportOpen(true)
-                      }}
+                    onClick={() => {
+                      setReferenceImportError('')
+                      setReferenceImportMode('replace')
+                      setReferenceImportOpen(true)
+                    }}
                       className="rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
                     >
                       Manage Reference
@@ -2984,13 +3007,15 @@ function App() {
                           onClick={() => toggleBrandExpanded(brand)}
                           className="flex w-full items-center justify-between rounded-t-xl border-b border-[#e6daf7] bg-[#f4eefc] px-4 py-3 text-left hover:bg-[#ede3fb]"
                         >
-                          <div className="min-w-0 flex flex-1 items-center gap-2 pr-3">
-                            <p className="font-display truncate text-sm leading-tight text-[#5e4a7f] md:text-base">{brand}</p>
-                            <p className="truncate text-xs text-[#8b7b6b]">
+                          <div className="min-w-0 flex flex-1 items-center gap-3 pr-3">
+                            <p className="font-display truncate text-base leading-tight text-[#4f4068] md:text-lg">{brand}</p>
+                            <p className="shrink-0 rounded-full border border-[#d7c7ee] bg-white/75 px-2.5 py-0.5 text-xs font-medium text-[#7c6b93]">
                               {brandFamilies.length} collections • {brandItems.length} {manageTab}
                             </p>
                           </div>
-                          <span className="text-sm text-[#8b7b6b]">{isBrandOpen ? '−' : '+'}</span>
+                          <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#d7c7ee] bg-white/80 text-base font-semibold leading-none text-[#5e4a7f]">
+                            {isBrandOpen ? '−' : '+'}
+                          </span>
                         </button>
 
                         <div className="flex flex-wrap items-center justify-end gap-2 px-4 py-3">
@@ -3809,6 +3834,33 @@ function App() {
                     Clear Reference
                   </button>
                 </div>
+              </div>
+            </div>
+            <div className="rounded-lg border border-[#e8e0d8] bg-white px-3 py-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Import Mode</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReferenceImportMode('replace')}
+                  className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                    referenceImportMode === 'replace'
+                      ? 'border-[#a58bc4] bg-[#e8dff5] text-[#4b3c63]'
+                      : 'border-[#d9cfc4] bg-white text-[#6b5b4f]'
+                  }`}
+                >
+                  Replace brand entries
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReferenceImportMode('append')}
+                  className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                    referenceImportMode === 'append'
+                      ? 'border-[#a58bc4] bg-[#e8dff5] text-[#4b3c63]'
+                      : 'border-[#d9cfc4] bg-white text-[#6b5b4f]'
+                  }`}
+                >
+                  Append to reference
+                </button>
               </div>
             </div>
             <p className="text-sm text-[#7f7468]">
