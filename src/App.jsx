@@ -379,7 +379,8 @@ function parseSuppliesTextImport(text) {
 
   if (!lines.length) throw new Error('Empty import text')
 
-  const headerMatch = lines[0].match(/^Hex Codes for\s+(.+)$/i)
+  const headerLine = lines[0].replace(/^\uFEFF/, '')
+  const headerMatch = headerLine.match(/^hex\s*codes?\s*for\s+(.+)$/i)
   if (!headerMatch) throw new Error('Unsupported text format')
 
   const brand = headerMatch[1].trim()
@@ -398,6 +399,13 @@ function parseSuppliesTextImport(text) {
 
   let currentFamily = ''
   const items = []
+
+  function resolveFamilyFromFirstColumn(firstColumn) {
+    const normalizedFirst = String(firstColumn || '').trim().toLowerCase()
+    if (!normalizedFirst) return ''
+    if (normalizedFirst === lowerBrand) return currentFamily
+    return firstColumn
+  }
 
   function pushSupplyItem(family, name, hexValue) {
     const normalizedFamily = String(family || '').trim()
@@ -422,6 +430,12 @@ function parseSuppliesTextImport(text) {
   }
 
   for (const line of lines.slice(1)) {
+    const collectionMatch = line.match(/^collection\s*name\s*:\s*(.+)$/i)
+    if (collectionMatch) {
+      currentFamily = String(collectionMatch[1] || '').trim()
+      continue
+    }
+
     const tabColumns = line
       .split(/\t+/)
       .map((part) => part.trim())
@@ -429,7 +443,8 @@ function parseSuppliesTextImport(text) {
     if (tabColumns.length >= 3) {
       const maybeHex = tabColumns[tabColumns.length - 1]
       if (normalizeHex(maybeHex)) {
-        const family = tabColumns[0]
+        const firstColumn = tabColumns[0]
+        const family = resolveFamilyFromFirstColumn(firstColumn)
         const name = tabColumns.slice(1, -1).join(' ')
         pushSupplyItem(family, name, maybeHex)
         continue
@@ -438,7 +453,8 @@ function parseSuppliesTextImport(text) {
 
     const spacedColumns = line.match(/^(.+?)\s{2,}(.+?)\s{2,}(#[0-9a-fA-F]{6})$/)
     if (spacedColumns) {
-      pushSupplyItem(spacedColumns[1], spacedColumns[2], spacedColumns[3])
+      const family = resolveFamilyFromFirstColumn(spacedColumns[1])
+      pushSupplyItem(family, spacedColumns[2], spacedColumns[3])
       continue
     }
 
