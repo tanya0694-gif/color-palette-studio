@@ -422,6 +422,60 @@ function smoothBinaryMask(imageData, passes = 1) {
   }
 }
 
+function dilateBinaryMask(imageData, passes = 1) {
+  const { data, width, height } = imageData
+  for (let pass = 0; pass < passes; pass += 1) {
+    const source = new Uint8ClampedArray(data)
+    for (let y = 1; y < height - 1; y += 1) {
+      for (let x = 1; x < width - 1; x += 1) {
+        const idx = (y * width + x) * 4
+        let hasBlack = false
+        for (let oy = -1; oy <= 1 && !hasBlack; oy += 1) {
+          for (let ox = -1; ox <= 1; ox += 1) {
+            const nIdx = ((y + oy) * width + (x + ox)) * 4
+            if (source[nIdx] < 128) {
+              hasBlack = true
+              break
+            }
+          }
+        }
+        const next = hasBlack ? 0 : 255
+        data[idx] = next
+        data[idx + 1] = next
+        data[idx + 2] = next
+        data[idx + 3] = 255
+      }
+    }
+  }
+}
+
+function erodeBinaryMask(imageData, passes = 1) {
+  const { data, width, height } = imageData
+  for (let pass = 0; pass < passes; pass += 1) {
+    const source = new Uint8ClampedArray(data)
+    for (let y = 1; y < height - 1; y += 1) {
+      for (let x = 1; x < width - 1; x += 1) {
+        const idx = (y * width + x) * 4
+        let allBlack = true
+        for (let oy = -1; oy <= 1 && allBlack; oy += 1) {
+          for (let ox = -1; ox <= 1; ox += 1) {
+            const nIdx = ((y + oy) * width + (x + ox)) * 4
+            if (source[nIdx] >= 128) {
+              allBlack = false
+              break
+            }
+          }
+        }
+        const next = allBlack ? 0 : 255
+        data[idx] = next
+        data[idx + 1] = next
+        data[idx + 2] = next
+        data[idx + 3] = 255
+      }
+    }
+  }
+}
+
 function createTwoLayerPatternMasks(img, { detail = 6, invert = false } = {}) {
   const maxDim = 1400
   const scale = Math.min(1, maxDim / Math.max(img.width, img.height))
@@ -455,9 +509,8 @@ function createTwoLayerPatternMasks(img, { detail = 6, invert = false } = {}) {
 
   const brightThreshold = Math.max(205, percentile(lightValues, 0.9) - 8)
   const lowSatThreshold = Math.max(26, percentile(satValues, 0.25))
-  const fillSatThreshold = Math.max(40, percentile(satValues, 0.6))
-  const fillDarkThreshold = Math.max(55, percentile(lightValues, 0.15))
-  const fillLightThreshold = Math.min(210, percentile(lightValues, 0.8))
+  const fillSatThreshold = Math.max(32, percentile(satValues, 0.45))
+  const fillVeryLowSat = Math.max(14, percentile(satValues, 0.2))
   const passes = detail >= 7 ? 1 : 2
 
   const outlineMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
@@ -487,7 +540,7 @@ function createTwoLayerPatternMasks(img, { detail = 6, invert = false } = {}) {
     const sat = max === 0 ? 0 : ((max - min) / max) * 255
 
     const isLikelyOutline = light >= brightThreshold && sat <= lowSatThreshold * 1.15
-    const isLikelyFill = sat >= fillSatThreshold && light >= fillDarkThreshold && light <= fillLightThreshold
+    const isLikelyFill = sat >= fillSatThreshold && !(light >= brightThreshold && sat <= fillVeryLowSat)
 
     let outlineValue = isLikelyOutline ? 0 : 255
     let fillValue = isLikelyFill ? 0 : 255
@@ -509,6 +562,9 @@ function createTwoLayerPatternMasks(img, { detail = 6, invert = false } = {}) {
 
   smoothBinaryMask(outlineMask, passes)
   smoothBinaryMask(fillMask, passes)
+  // Close small interior holes so motifs stay solid for cutter paths.
+  dilateBinaryMask(fillMask, 1)
+  erodeBinaryMask(fillMask, 1)
 
   ctx.putImageData(fillMask, 0, 0)
   const fillPreview = canvas.toDataURL('image/png')
