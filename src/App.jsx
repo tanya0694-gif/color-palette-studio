@@ -2905,8 +2905,10 @@ function App() {
                           className="flex w-full items-center justify-between rounded-t-xl p-4 text-left hover:bg-[#faf7f4]"
                         >
                           <div>
-                            <p className="font-medium text-[#5c4a3d]">{brand}</p>
-                            <p className="text-xs text-[#8b7b6b]">
+                            <p className="inline-flex rounded-full border border-[#d7c7ee] bg-[#f4eefc] px-3 py-1 text-sm font-semibold text-[#5e4a7f]">
+                              {brand}
+                            </p>
+                            <p className="mt-1 text-xs text-[#8b7b6b]">
                               {brandFamilies.length} collections • {brandItems.length} {manageTab}
                             </p>
                           </div>
