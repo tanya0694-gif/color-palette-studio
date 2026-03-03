@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import ImageTracer from 'imagetracerjs'
 import { supabase, supabaseConfigured } from './lib/supabase'
 
 const STORAGE_KEY = 'palette-studio-data'
@@ -257,6 +258,191 @@ async function extractPaletteFromImageFile(file, count = 5) {
   } finally {
     URL.revokeObjectURL(url)
   }
+}
+
+async function loadImageFromFile(file) {
+  if (!file) throw new Error('Choose an image first.')
+  const url = URL.createObjectURL(file)
+  try {
+    return await new Promise((resolve, reject) => {
+      const image = new Image()
+      image.onload = () => resolve(image)
+      image.onerror = () => reject(new Error('Could not read image file.'))
+      image.src = url
+    })
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+function createStencilImageData(img, { threshold = 140, invert = false, detail = 6 } = {}) {
+  const maxDim = 1200
+  const scale = Math.min(1, maxDim / Math.max(img.width, img.height))
+  const width = Math.max(1, Math.round(img.width * scale))
+  const height = Math.max(1, Math.round(img.height * scale))
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) throw new Error('Could not create canvas context.')
+
+  ctx.drawImage(img, 0, 0, width, height)
+  const imageData = ctx.getImageData(0, 0, width, height)
+  const { data } = imageData
+  const quantizeStep = Math.max(1, Math.round((11 - Math.max(1, Math.min(10, detail))) * 2))
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i]
+    const g = data[i + 1]
+    const b = data[i + 2]
+    const a = data[i + 3]
+    if (a < 15) {
+      data[i] = 255
+      data[i + 1] = 255
+      data[i + 2] = 255
+      data[i + 3] = 255
+      continue
+    }
+
+    const gray = 0.299 * r + 0.587 * g + 0.114 * b
+    let value = gray >= threshold ? 255 : 0
+    if (invert) value = value === 255 ? 0 : 255
+    const snapped = Math.round(value / quantizeStep) * quantizeStep
+    const safe = Math.max(0, Math.min(255, snapped))
+    data[i] = safe
+    data[i + 1] = safe
+    data[i + 2] = safe
+    data[i + 3] = 255
+  }
+
+  ctx.putImageData(imageData, 0, 0)
+
+  return {
+    imageData: ctx.getImageData(0, 0, width, height),
+    width,
+    height,
+    rasterDataUrl: canvas.toDataURL('image/png'),
+  }
+}
+
+function createPosterizedStencilLayers(
+  img,
+  { layerCount = 3, invert = false, detail = 6 } = {},
+) {
+  const maxDim = 1200
+  const scale = Math.min(1, maxDim / Math.max(img.width, img.height))
+  const width = Math.max(1, Math.round(img.width * scale))
+  const height = Math.max(1, Math.round(img.height * scale))
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) throw new Error('Could not create canvas context.')
+
+  ctx.drawImage(img, 0, 0, width, height)
+  const source = ctx.getImageData(0, 0, width, height)
+  const steps = Math.max(2, Math.min(6, Math.round(layerCount)))
+  const quantizeStep = Math.max(1, Math.round((11 - Math.max(1, Math.min(10, detail))) * 2))
+
+  const layers = Array.from({ length: steps }, (_, index) => {
+    const data = new Uint8ClampedArray(source.data.length)
+    return {
+      index,
+      cutoffLow: Math.floor((index / steps) * 255),
+      cutoffHigh: Math.floor(((index + 1) / steps) * 255),
+      imageData: new ImageData(data, width, height),
+      previewUrl: '',
+    }
+  })
+
+  for (let i = 0; i < source.data.length; i += 4) {
+    const r = source.data[i]
+    const g = source.data[i + 1]
+    const b = source.data[i + 2]
+    const a = source.data[i + 3]
+    const grayRaw = a < 15 ? 255 : 0.299 * r + 0.587 * g + 0.114 * b
+    const gray = invert ? 255 - grayRaw : grayRaw
+
+    for (const layer of layers) {
+      const inBand =
+        gray >= layer.cutoffLow &&
+        (layer.index === layers.length - 1 ? gray <= layer.cutoffHigh : gray < layer.cutoffHigh)
+      const value = inBand ? 0 : 255
+      const snapped = Math.round(value / quantizeStep) * quantizeStep
+      const safe = Math.max(0, Math.min(255, snapped))
+      layer.imageData.data[i] = safe
+      layer.imageData.data[i + 1] = safe
+      layer.imageData.data[i + 2] = safe
+      layer.imageData.data[i + 3] = 255
+    }
+  }
+
+  return layers.map((layer) => {
+    ctx.putImageData(layer.imageData, 0, 0)
+    return {
+      index: layer.index,
+      cutoffLow: layer.cutoffLow,
+      cutoffHigh: layer.cutoffHigh,
+      imageData: layer.imageData,
+      previewUrl: canvas.toDataURL('image/png'),
+    }
+  })
+}
+
+function buildStencilSvg(imageData, { detail = 6, noiseFilter = 10, bridgeWidth = 0 }) {
+  const tunedDetail = Math.max(1, Math.min(10, detail))
+  const tunedNoise = Math.max(0, Math.min(30, noiseFilter))
+  const options = {
+    colorsampling: 0,
+    colorquantcycles: 1,
+    numberofcolors: 2,
+    layering: 0,
+    pathomit: tunedNoise,
+    rightangleenhance: true,
+    linefilter: false,
+    ltres: 2 - tunedDetail * 0.15,
+    qtres: 2 - tunedDetail * 0.15,
+    strokewidth: 0,
+    roundcoords: 1,
+    viewbox: true,
+    pal: [
+      { r: 0, g: 0, b: 0, a: 255 },
+      { r: 255, g: 255, b: 255, a: 255 },
+    ],
+  }
+
+  const rawSvg = ImageTracer.imagedataToSVG(imageData, options)
+  const parser = new DOMParser()
+  const parsed = parser.parseFromString(rawSvg, 'image/svg+xml')
+  const svg = parsed.querySelector('svg')
+  if (!svg) throw new Error('Vector output failed.')
+
+  const paths = [...svg.querySelectorAll('path')]
+  for (const path of paths) {
+    const fill = String(path.getAttribute('fill') || '').toLowerCase()
+    if (fill.includes('255,255,255') || fill === '#fff' || fill === '#ffffff' || fill === 'white') {
+      path.remove()
+      continue
+    }
+    path.setAttribute('fill', '#111111')
+    if (bridgeWidth > 0) {
+      path.setAttribute('stroke', '#111111')
+      path.setAttribute('stroke-width', String(bridgeWidth))
+      path.setAttribute('stroke-linejoin', 'round')
+      path.setAttribute('stroke-linecap', 'round')
+    } else {
+      path.removeAttribute('stroke')
+      path.removeAttribute('stroke-width')
+    }
+  }
+
+  svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')
+  svg.style.background = '#ffffff'
+
+  return new XMLSerializer().serializeToString(svg)
 }
 
 function normalizePalette(raw, fallbackCollection = '') {
@@ -660,15 +846,43 @@ function HeaderBar({
   onOpenImportBackup,
   onOpenCloudSync,
   cloudSignedIn,
+  workspaceMode,
+  onChangeWorkspaceMode,
 }) {
   return (
     <header className="sticky top-0 z-40 border-b border-[#a89cc5] bg-[#e0d5f0] px-3 py-3 md:px-6 md:py-4">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2">
-        <h1 className="font-display flex min-w-0 items-center gap-2 text-lg font-semibold text-[#3f3254] sm:text-xl md:text-3xl">
-          <span>🎨</span>
-          <span className="hidden truncate sm:inline">Color Palette Studio</span>
-          <span className="sm:hidden">Studio</span>
-        </h1>
+        <div className="min-w-0">
+          <h1 className="font-display flex min-w-0 items-center gap-2 text-lg font-semibold text-[#3f3254] sm:text-xl md:text-3xl">
+            <span>🎨</span>
+            <span className="hidden truncate sm:inline">Palette Studio</span>
+            <span className="sm:hidden">Studio</span>
+          </h1>
+          <div className="mt-2 inline-flex rounded-xl border border-[#b7a7d1] bg-[#d6c8ec] p-1">
+            <button
+              type="button"
+              onClick={() => onChangeWorkspaceMode('palette')}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium md:px-4 md:text-sm ${
+                workspaceMode === 'palette'
+                  ? 'bg-[#a58bc4] text-[#3f3254]'
+                  : 'text-[#5f5276] hover:bg-[#cabbe0]'
+              }`}
+            >
+              Palette Studio
+            </button>
+            <button
+              type="button"
+              onClick={() => onChangeWorkspaceMode('stencil')}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium md:px-4 md:text-sm ${
+                workspaceMode === 'stencil'
+                  ? 'bg-[#a58bc4] text-[#3f3254]'
+                  : 'text-[#5f5276] hover:bg-[#cabbe0]'
+              }`}
+            >
+              Stencil Studio
+            </button>
+          </div>
+        </div>
 
         <div className="flex w-full flex-wrap items-center justify-end gap-1 sm:w-auto md:gap-2">
           <button
@@ -1303,6 +1517,274 @@ function SuppliesPanel({
   )
 }
 
+function StencilStudioPanel({
+  stencilImageFile,
+  stencilImagePreviewUrl,
+  stencilProcessedPreviewUrl,
+  stencilSvg,
+  stencilLayers,
+  stencilSettings,
+  stencilBusy,
+  stencilError,
+  onImageChange,
+  onUpdateSetting,
+  onGenerate,
+  onDownloadSvg,
+  onDownloadLayerSvg,
+}) {
+  return (
+    <main className="flex-1 w-full max-w-7xl self-center overflow-auto px-4 py-4 md:px-6 md:py-6">
+      <section className="rounded-2xl border border-[#e8e0d8] bg-white/75 p-4 shadow-sm md:rounded-3xl md:p-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="font-display text-2xl font-semibold text-[#3f3254] md:text-3xl">Stencil Studio</h2>
+            <p className="text-sm text-[#7f7468]">
+              Upload an image, tune the cutoff, and export stencil-ready SVG vectors.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onGenerate}
+              disabled={!stencilImageFile || stencilBusy}
+              className="rounded-lg bg-[#a58bc4] px-4 py-2 text-sm font-medium text-[#3f3254] hover:bg-[#9678b8] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {stencilBusy ? 'Vectorizing...' : 'Generate Stencil'}
+            </button>
+            <button
+              type="button"
+              onClick={onDownloadSvg}
+              disabled={!stencilSvg}
+              className="rounded-lg border border-[#d7c7ee] bg-[#f4eefc] px-4 py-2 text-sm font-medium text-[#5e4a7f] hover:bg-[#ece2fa] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Download SVG
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[330px_1fr]">
+          <aside className="rounded-xl border border-[#e8e0d8] bg-[#faf7f4] p-4">
+            <div className="space-y-4">
+              <div>
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                  Source Image
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => onImageChange(e.target.files?.[0] || null)}
+                  className="w-full rounded-lg border border-[#d9cfc4] bg-white p-2 text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                  Output Mode
+                </label>
+                <div className="inline-flex rounded-lg border border-[#d9cfc4] bg-white p-1">
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSetting('mode', 'single')}
+                    className={`rounded-md px-3 py-1 text-xs font-medium ${
+                      stencilSettings.mode === 'single'
+                        ? 'bg-[#a58bc4] text-[#3f3254]'
+                        : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                    }`}
+                  >
+                    Single
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSetting('mode', 'multi')}
+                    className={`rounded-md px-3 py-1 text-xs font-medium ${
+                      stencilSettings.mode === 'multi'
+                        ? 'bg-[#a58bc4] text-[#3f3254]'
+                        : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                    }`}
+                  >
+                    Multi-layer
+                  </button>
+                </div>
+              </div>
+
+              {stencilSettings.mode === 'single' ? (
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    Threshold ({stencilSettings.threshold})
+                  </label>
+                  <input
+                    type="range"
+                    min={20}
+                    max={235}
+                    value={stencilSettings.threshold}
+                    onChange={(e) => onUpdateSetting('threshold', Number(e.target.value))}
+                    className="w-full accent-[#9678b8]"
+                  />
+                </div>
+              ) : null}
+
+              {stencilSettings.mode === 'multi' ? (
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    Layers ({stencilSettings.layerCount})
+                  </label>
+                  <input
+                    type="range"
+                    min={2}
+                    max={6}
+                    value={stencilSettings.layerCount}
+                    onChange={(e) => onUpdateSetting('layerCount', Number(e.target.value))}
+                    className="w-full accent-[#9678b8]"
+                  />
+                </div>
+              ) : null}
+
+              <div>
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                  Detail ({stencilSettings.detail})
+                </label>
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  value={stencilSettings.detail}
+                  onChange={(e) => onUpdateSetting('detail', Number(e.target.value))}
+                  className="w-full accent-[#9678b8]"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                  Noise Filter ({stencilSettings.noiseFilter})
+                </label>
+                <input
+                  type="range"
+                  min={0}
+                  max={30}
+                  value={stencilSettings.noiseFilter}
+                  onChange={(e) => onUpdateSetting('noiseFilter', Number(e.target.value))}
+                  className="w-full accent-[#9678b8]"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                  Bridge Width ({stencilSettings.bridgeWidth})
+                </label>
+                <input
+                  type="range"
+                  min={0}
+                  max={6}
+                  step={0.5}
+                  value={stencilSettings.bridgeWidth}
+                  onChange={(e) => onUpdateSetting('bridgeWidth', Number(e.target.value))}
+                  className="w-full accent-[#9678b8]"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 text-sm text-[#5c4a3d]">
+                <input
+                  type="checkbox"
+                  checked={stencilSettings.invert}
+                  onChange={(e) => onUpdateSetting('invert', e.target.checked)}
+                  className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
+                />
+                Invert stencil (light areas become cutouts)
+              </label>
+            </div>
+          </aside>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="rounded-xl border border-[#e8e0d8] bg-white p-4">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Preview</p>
+              {stencilImagePreviewUrl ? (
+                <img
+                  src={stencilImagePreviewUrl}
+                  alt="Stencil source"
+                  className="h-[280px] w-full rounded-lg border border-[#eee5db] object-contain bg-white"
+                />
+              ) : (
+                <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed border-[#ddd0c1] bg-[#faf7f4] text-sm text-[#8b7b6b]">
+                  Upload an image to start.
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-[#e8e0d8] bg-white p-4">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                Thresholded Raster
+              </p>
+              {stencilProcessedPreviewUrl ? (
+                <img
+                  src={stencilProcessedPreviewUrl}
+                  alt="Processed stencil preview"
+                  className="h-[280px] w-full rounded-lg border border-[#eee5db] object-contain bg-white"
+                />
+              ) : (
+                <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed border-[#ddd0c1] bg-[#faf7f4] text-sm text-[#8b7b6b]">
+                  Generate to see binary stencil preview.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-[#e8e0d8] bg-white p-4">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Vector Output</p>
+            <p className="text-xs text-[#9a8d80]">
+              {stencilSettings.mode === 'multi'
+                ? `Layer 1 preview shown here. ${stencilLayers.length} layers generated.`
+                : 'Black areas are stencil cut geometry'}
+            </p>
+          </div>
+          {stencilSvg ? (
+            <div
+              className="h-[340px] overflow-auto rounded-lg border border-[#eee5db] bg-white p-2"
+              dangerouslySetInnerHTML={{ __html: stencilSvg }}
+            />
+          ) : (
+            <div className="flex h-[340px] items-center justify-center rounded-lg border border-dashed border-[#ddd0c1] bg-[#faf7f4] text-sm text-[#8b7b6b]">
+              Click Generate Stencil to create vectors.
+            </div>
+          )}
+          {stencilError ? <p className="mt-3 text-sm text-red-600">{stencilError}</p> : null}
+        </div>
+
+        {stencilSettings.mode === 'multi' && stencilLayers.length > 0 ? (
+          <div className="mt-4 rounded-xl border border-[#e8e0d8] bg-white p-4">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+              Generated Layers
+            </p>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {stencilLayers.map((layer) => (
+                <div key={`stencil-layer-${layer.index}`} className="rounded-lg border border-[#eee5db] p-3">
+                  <p className="text-sm font-medium text-[#5c4a3d]">Layer {layer.index + 1}</p>
+                  <p className="mb-2 text-xs text-[#8b7b6b]">
+                    Tone {layer.cutoffLow}-{layer.cutoffHigh}
+                  </p>
+                  <img
+                    src={layer.previewUrl}
+                    alt={`Stencil layer ${layer.index + 1}`}
+                    className="mb-2 h-28 w-full rounded-md border border-[#eee5db] object-contain bg-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onDownloadLayerSvg(layer.index)}
+                    className="w-full rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
+                  >
+                    Download Layer SVG
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </section>
+    </main>
+  )
+}
+
 function ModalShell({ title, children, footer, onClose, width = 'max-w-lg' }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
@@ -1402,6 +1884,7 @@ function App() {
   const [data, setData] = useState(loadData)
   const [masterLists, setMasterLists] = useState(loadMasterLists)
   const [dataMenuOpen, setDataMenuOpen] = useState(false)
+  const [workspaceMode, setWorkspaceMode] = useState('palette')
   const [activeCollection, setActiveCollection] = useState('')
   const [paletteSearch, setPaletteSearch] = useState('')
   const [selectedPaletteId, setSelectedPaletteId] = useState(null)
@@ -1495,6 +1978,22 @@ function App() {
   const [paletteImageColorCount, setPaletteImageColorCount] = useState(5)
   const [paletteImageBusy, setPaletteImageBusy] = useState(false)
   const [paletteImageError, setPaletteImageError] = useState('')
+  const [stencilImageFile, setStencilImageFile] = useState(null)
+  const [stencilImagePreviewUrl, setStencilImagePreviewUrl] = useState('')
+  const [stencilProcessedPreviewUrl, setStencilProcessedPreviewUrl] = useState('')
+  const [stencilSvg, setStencilSvg] = useState('')
+  const [stencilLayers, setStencilLayers] = useState([])
+  const [stencilBusy, setStencilBusy] = useState(false)
+  const [stencilError, setStencilError] = useState('')
+  const [stencilSettings, setStencilSettings] = useState({
+    mode: 'single',
+    threshold: 140,
+    detail: 6,
+    noiseFilter: 8,
+    bridgeWidth: 0,
+    layerCount: 3,
+    invert: false,
+  })
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
@@ -1505,6 +2004,12 @@ function App() {
       if (paletteImagePreviewUrl) URL.revokeObjectURL(paletteImagePreviewUrl)
     }
   }, [paletteImagePreviewUrl])
+
+  useEffect(() => {
+    return () => {
+      if (stencilImagePreviewUrl) URL.revokeObjectURL(stencilImagePreviewUrl)
+    }
+  }, [stencilImagePreviewUrl])
 
   useEffect(() => {
     if (!brandFeedback) return
@@ -1922,6 +2427,92 @@ function App() {
     } finally {
       setPaletteImageBusy(false)
     }
+  }
+
+  function handleStencilImageFileChange(file) {
+    setStencilError('')
+    setStencilImageFile(file || null)
+    setStencilSvg('')
+    setStencilLayers([])
+    setStencilProcessedPreviewUrl('')
+    if (stencilImagePreviewUrl) {
+      URL.revokeObjectURL(stencilImagePreviewUrl)
+    }
+    if (!file) {
+      setStencilImagePreviewUrl('')
+      return
+    }
+    setStencilImagePreviewUrl(URL.createObjectURL(file))
+  }
+
+  function updateStencilSetting(field, value) {
+    setStencilSettings((prev) => ({ ...prev, [field]: value }))
+    setStencilSvg('')
+    setStencilLayers([])
+    setStencilProcessedPreviewUrl('')
+  }
+
+  async function generateStencilFromImage() {
+    if (!stencilImageFile) {
+      setStencilError('Choose an image first.')
+      return
+    }
+
+    try {
+      setStencilBusy(true)
+      setStencilError('')
+      setStencilLayers([])
+      const image = await loadImageFromFile(stencilImageFile)
+      if (stencilSettings.mode === 'multi') {
+        const posterizedLayers = createPosterizedStencilLayers(image, stencilSettings)
+        const layerSvgs = posterizedLayers.map((layer) => ({
+          index: layer.index,
+          cutoffLow: layer.cutoffLow,
+          cutoffHigh: layer.cutoffHigh,
+          previewUrl: layer.previewUrl,
+          svg: buildStencilSvg(layer.imageData, stencilSettings),
+        }))
+        setStencilProcessedPreviewUrl(layerSvgs[0]?.previewUrl || '')
+        setStencilSvg(layerSvgs[0]?.svg || '')
+        setStencilLayers(layerSvgs)
+      } else {
+        const processed = createStencilImageData(image, stencilSettings)
+        const svg = buildStencilSvg(processed.imageData, stencilSettings)
+        setStencilProcessedPreviewUrl(processed.rasterDataUrl)
+        setStencilSvg(svg)
+      }
+    } catch (error) {
+      setStencilError(error instanceof Error ? error.message : 'Stencil generation failed.')
+    } finally {
+      setStencilBusy(false)
+    }
+  }
+
+  function downloadStencilSvg() {
+    if (!stencilSvg) return
+    const blob = new Blob([stencilSvg], { type: 'image/svg+xml;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `stencil-${new Date().toISOString().slice(0, 10)}.svg`
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    URL.revokeObjectURL(url)
+  }
+
+  function downloadStencilLayerSvg(layerIndex) {
+    const layer = stencilLayers.find((entry) => entry.index === layerIndex)
+    if (!layer?.svg) return
+    const blob = new Blob([layer.svg], { type: 'image/svg+xml;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `stencil-layer-${layerIndex + 1}-${new Date().toISOString().slice(0, 10)}.svg`
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    URL.revokeObjectURL(url)
   }
 
   function savePaletteForm() {
@@ -2839,6 +3430,8 @@ function App() {
         onToggleDataMenu={() => setDataMenuOpen((open) => !open)}
         onOpenCloudSync={() => void openCloudSyncModal()}
         cloudSignedIn={Boolean(authUserEmail)}
+        workspaceMode={workspaceMode}
+        onChangeWorkspaceMode={setWorkspaceMode}
         onOpenManageSupplies={() => {
           setDataMenuOpen(false)
           setManageSuppliesOpen(true)
@@ -2871,52 +3464,72 @@ function App() {
         }}
       />
 
-      <FilterSection
-        collections={collections}
-        activeCollection={activeCollection}
-        setActiveCollection={setActiveCollection}
-        paletteSearch={paletteSearch}
-        setPaletteSearch={setPaletteSearch}
-        rangeBuckets={rangeBuckets}
-        onSelectPalette={(paletteId) => {
-          setSelectedPaletteId(paletteId)
-          const palette = data.palettes.find((p) => p.id === paletteId)
-          setSelectedColorHex(palette?.colors?.[0]?.hex || null)
-        }}
-        onOpenAddPalette={openAddPaletteModal}
-      />
+      {workspaceMode === 'palette' ? (
+        <>
+          <FilterSection
+            collections={collections}
+            activeCollection={activeCollection}
+            setActiveCollection={setActiveCollection}
+            paletteSearch={paletteSearch}
+            setPaletteSearch={setPaletteSearch}
+            rangeBuckets={rangeBuckets}
+            onSelectPalette={(paletteId) => {
+              setSelectedPaletteId(paletteId)
+              const palette = data.palettes.find((p) => p.id === paletteId)
+              setSelectedColorHex(palette?.colors?.[0]?.hex || null)
+            }}
+            onOpenAddPalette={openAddPaletteModal}
+          />
 
-      <main className="flex-1 w-full max-w-7xl self-center overflow-auto px-4 py-4 md:px-6 md:py-6">
-        <div className="grid h-full grid-cols-1 gap-4 md:gap-6 lg:grid-cols-2">
-          <PalettePanel
-            palette={selectedPalette}
-            selectedColorHex={selectedColorHex}
-            onSelectColor={setSelectedColorHex}
-            onOpenEditPalette={openEditPaletteModal}
-            onOpenRecipeModal={() => openRecipeModalForPalette(selectedPalette)}
-            onOpenEditRecipe={openRecipeEdit}
-            onDeleteRecipe={deleteRecipe}
-            recipes={paletteRecipes}
-            colorCodeMode={colorCodeMode}
-          />
-          <SuppliesPanel
-            tab={suppliesTab}
-            setTab={setSuppliesTab}
-            selectedColorHex={selectedColorHex}
-            selectedShadeLabel={selectedShadeLabel}
-            items={matchingItems}
-            brandFilter={suppliesBrandFilter[suppliesTab] || ''}
-            setBrandFilter={(value) =>
-              setSuppliesBrandFilter((prev) => ({ ...prev, [suppliesTab]: value }))
-            }
-            availableBrands={suppliesAvailableBrands}
-            colorCodeMode={colorCodeMode}
-            setColorCodeMode={setColorCodeMode}
-            showMatchScores={showMatchScores}
-            setShowMatchScores={setShowMatchScores}
-          />
-        </div>
-      </main>
+          <main className="flex-1 w-full max-w-7xl self-center overflow-auto px-4 py-4 md:px-6 md:py-6">
+            <div className="grid h-full grid-cols-1 gap-4 md:gap-6 lg:grid-cols-2">
+              <PalettePanel
+                palette={selectedPalette}
+                selectedColorHex={selectedColorHex}
+                onSelectColor={setSelectedColorHex}
+                onOpenEditPalette={openEditPaletteModal}
+                onOpenRecipeModal={() => openRecipeModalForPalette(selectedPalette)}
+                onOpenEditRecipe={openRecipeEdit}
+                onDeleteRecipe={deleteRecipe}
+                recipes={paletteRecipes}
+                colorCodeMode={colorCodeMode}
+              />
+              <SuppliesPanel
+                tab={suppliesTab}
+                setTab={setSuppliesTab}
+                selectedColorHex={selectedColorHex}
+                selectedShadeLabel={selectedShadeLabel}
+                items={matchingItems}
+                brandFilter={suppliesBrandFilter[suppliesTab] || ''}
+                setBrandFilter={(value) =>
+                  setSuppliesBrandFilter((prev) => ({ ...prev, [suppliesTab]: value }))
+                }
+                availableBrands={suppliesAvailableBrands}
+                colorCodeMode={colorCodeMode}
+                setColorCodeMode={setColorCodeMode}
+                showMatchScores={showMatchScores}
+                setShowMatchScores={setShowMatchScores}
+              />
+            </div>
+          </main>
+        </>
+      ) : (
+        <StencilStudioPanel
+          stencilImageFile={stencilImageFile}
+          stencilImagePreviewUrl={stencilImagePreviewUrl}
+          stencilProcessedPreviewUrl={stencilProcessedPreviewUrl}
+          stencilSvg={stencilSvg}
+          stencilLayers={stencilLayers}
+          stencilSettings={stencilSettings}
+          stencilBusy={stencilBusy}
+          stencilError={stencilError}
+          onImageChange={handleStencilImageFileChange}
+          onUpdateSetting={updateStencilSetting}
+          onGenerate={() => void generateStencilFromImage()}
+          onDownloadSvg={downloadStencilSvg}
+          onDownloadLayerSvg={downloadStencilLayerSvg}
+        />
+      )}
 
       {manageSuppliesOpen ? (
         <ModalShell title="Manage Supplies" onClose={() => setManageSuppliesOpen(false)} width="max-w-2xl">
