@@ -178,6 +178,11 @@ function rgbToHex(r, g, b) {
     .toUpperCase()}`
 }
 
+function safeAverageColor(stats, fallback = '#666666') {
+  if (!stats || !stats.count) return fallback
+  return rgbToHex(stats.r / stats.count, stats.g / stats.count, stats.b / stats.count)
+}
+
 async function extractPaletteFromImageFile(file, count = 5) {
   if (!file) throw new Error('Choose an image first.')
   const url = URL.createObjectURL(file)
@@ -440,7 +445,7 @@ function createPosterizedStencilLayers(
   if (!ctx) throw new Error('Could not create canvas context.')
 
   const source = ctx.getImageData(0, 0, width, height)
-  const steps = Math.max(2, Math.min(6, Math.round(layerCount)))
+  const steps = Math.max(2, Math.min(10, Math.round(layerCount)))
   const quantizeStep = Math.max(1, Math.round((11 - Math.max(1, Math.min(10, detail))) * 2))
 
   const layers = Array.from({ length: steps }, (_, index) => {
@@ -451,6 +456,7 @@ function createPosterizedStencilLayers(
       cutoffHigh: Math.floor(((index + 1) / steps) * 255),
       imageData: new ImageData(data, width, height),
       previewUrl: '',
+      colorStats: { r: 0, g: 0, b: 0, count: 0 },
     }
   })
 
@@ -467,6 +473,12 @@ function createPosterizedStencilLayers(
         gray >= layer.cutoffLow &&
         (layer.index === layers.length - 1 ? gray <= layer.cutoffHigh : gray < layer.cutoffHigh)
       const value = inBand ? 0 : 255
+      if (inBand) {
+        layer.colorStats.r += r
+        layer.colorStats.g += g
+        layer.colorStats.b += b
+        layer.colorStats.count += 1
+      }
       const snapped = Math.round(value / quantizeStep) * quantizeStep
       const safe = Math.max(0, Math.min(255, snapped))
       layer.imageData.data[i] = safe
@@ -484,6 +496,7 @@ function createPosterizedStencilLayers(
       cutoffHigh: layer.cutoffHigh,
       imageData: layer.imageData,
       previewUrl: canvas.toDataURL('image/png'),
+      colorHex: safeAverageColor(layer.colorStats, '#7E86C2'),
     }
   })
 }
@@ -874,6 +887,63 @@ function wrapSvgForStencilCanvas(
   return new XMLSerializer().serializeToString(outputSvg)
 }
 
+function tintStencilSvg(svgString, color = '#555555', opacity = 1) {
+  const parser = new DOMParser()
+  const parsed = parser.parseFromString(svgString, 'image/svg+xml')
+  const svg = parsed.querySelector('svg')
+  if (!svg) return svgString
+  const paths = svg.querySelectorAll('path')
+  paths.forEach((path) => {
+    path.setAttribute('fill', color)
+    path.setAttribute('opacity', String(opacity))
+    const hasStroke = path.hasAttribute('stroke')
+    if (hasStroke) path.setAttribute('stroke', color)
+  })
+  return new XMLSerializer().serializeToString(svg)
+}
+
+function buildCompositeLayerPreview(layers = []) {
+  const ordered = layers
+    .filter((layer) => layer?.svg)
+    .slice()
+    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+  if (!ordered.length) return ''
+
+  const parser = new DOMParser()
+  const firstDoc = parser.parseFromString(ordered[0].svg, 'image/svg+xml')
+  const firstSvg = firstDoc.querySelector('svg')
+  if (!firstSvg) return ''
+
+  const compositeDoc = document.implementation.createDocument('http://www.w3.org/2000/svg', 'svg', null)
+  const composite = compositeDoc.documentElement
+  composite.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+  const viewBox = firstSvg.getAttribute('viewBox')
+  const width = firstSvg.getAttribute('width')
+  const height = firstSvg.getAttribute('height')
+  if (viewBox) composite.setAttribute('viewBox', viewBox)
+  if (width) composite.setAttribute('width', width)
+  if (height) composite.setAttribute('height', height)
+  composite.setAttribute('preserveAspectRatio', 'xMidYMid meet')
+
+  ordered.forEach((layer) => {
+    const layerDoc = parser.parseFromString(layer.svg, 'image/svg+xml')
+    const layerSvg = layerDoc.querySelector('svg')
+    if (!layerSvg) return
+    layerSvg.querySelectorAll('path').forEach((sourcePath) => {
+      const node = compositeDoc.createElementNS('http://www.w3.org/2000/svg', 'path')
+      node.setAttribute('d', sourcePath.getAttribute('d') || '')
+      node.setAttribute('fill', layer.colorHex || '#555555')
+      if (sourcePath.hasAttribute('stroke')) {
+        node.setAttribute('stroke', layer.colorHex || '#555555')
+        node.setAttribute('stroke-width', sourcePath.getAttribute('stroke-width') || '1')
+      }
+      composite.appendChild(node)
+    })
+  })
+
+  return new XMLSerializer().serializeToString(composite)
+}
+
 function normalizePalette(raw, fallbackCollection = '') {
   if (!raw || typeof raw !== 'object') return null
   const collection = String(raw.collection || fallbackCollection || '').trim()
@@ -1145,6 +1215,7 @@ function loadStencilLibrary() {
                 name: String(layer?.name || `Layer ${index + 1}`),
                 hint: String(layer?.hint || ''),
                 previewUrl: String(layer?.previewUrl || ''),
+                colorHex: normalizeHex(layer?.colorHex) || '#7E86C2',
                 svg: String(layer?.svg || ''),
               }))
               .filter((layer) => layer.svg)
@@ -2001,6 +2072,10 @@ function StencilStudioPanel({
   onDeleteFromLibrary,
 }) {
   const [isDragActive, setIsDragActive] = useState(false)
+  const [vectorPreviewMode, setVectorPreviewMode] = useState('current')
+  const compositePreviewSvg = useMemo(() => buildCompositeLayerPreview(stencilLayers), [stencilLayers])
+  const activeVectorSvg =
+    vectorPreviewMode === 'stacked' && compositePreviewSvg ? compositePreviewSvg : stencilSvg
 
   function HelpTip({ text }) {
     const [open, setOpen] = useState(false)
@@ -2275,7 +2350,7 @@ function StencilStudioPanel({
                   <input
                     type="range"
                     min={2}
-                    max={6}
+                    max={10}
                     value={stencilSettings.layerCount}
                     onChange={(e) => onUpdateSetting('layerCount', Number(e.target.value))}
                     className="w-full accent-[#9678b8]"
@@ -2377,8 +2452,36 @@ function StencilStudioPanel({
         </div>
 
         <div className="mt-4 rounded-xl border border-[#d7c7ee] bg-[#fcf9ff] p-4">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Vector Output</p>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Vector Output</p>
+              {stencilLayers.length > 0 ? (
+                <div className="inline-flex rounded-md border border-[#d7c7ee] bg-[#f4eefc] p-1">
+                  <button
+                    type="button"
+                    onClick={() => setVectorPreviewMode('current')}
+                    className={`rounded px-2 py-1 text-[10px] font-semibold ${
+                      vectorPreviewMode === 'current'
+                        ? 'bg-[#a58bc4] text-[#3f3254]'
+                        : 'text-[#5f5276] hover:bg-white'
+                    }`}
+                  >
+                    Current
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVectorPreviewMode('stacked')}
+                    className={`rounded px-2 py-1 text-[10px] font-semibold ${
+                      vectorPreviewMode === 'stacked'
+                        ? 'bg-[#a58bc4] text-[#3f3254]'
+                        : 'text-[#5f5276] hover:bg-white'
+                    }`}
+                  >
+                    Stacked Color
+                  </button>
+                </div>
+              ) : null}
+            </div>
             <p className="text-xs text-[#9a8d80]">
               {stencilSettings.mode === 'pattern'
                 ? 'Pattern mode: first layer preview shown (fills), second layer in Generated Layers.'
@@ -2387,10 +2490,10 @@ function StencilStudioPanel({
                 : 'Black areas are stencil cut geometry'}
             </p>
           </div>
-          {stencilSvg ? (
+          {activeVectorSvg ? (
             <div
               className="h-[340px] overflow-auto rounded-lg border border-[#eee5db] bg-white p-2"
-              dangerouslySetInnerHTML={{ __html: stencilSvg }}
+              dangerouslySetInnerHTML={{ __html: activeVectorSvg }}
             />
           ) : (
             <div className="flex h-[340px] items-center justify-center rounded-lg border border-dashed border-[#ddd0c1] bg-[#faf7f4] text-sm text-[#8b7b6b]">
@@ -2410,11 +2513,21 @@ function StencilStudioPanel({
                 <div key={`stencil-layer-${layer.index}`} className="rounded-lg border border-[#eee5db] p-3">
                   <p className="text-sm font-medium text-[#5c4a3d]">{layer.name || `Layer ${layer.index + 1}`}</p>
                   <p className="mb-2 text-xs text-[#8b7b6b]">{layer.hint || `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`}</p>
-                  <img
-                    src={layer.previewUrl}
-                    alt={`Stencil layer ${layer.index + 1}`}
-                    className="mb-2 h-28 w-full rounded-md border border-[#eee5db] object-contain bg-white"
+                  <div
+                    className="mb-2 h-28 w-full overflow-hidden rounded-md border border-[#eee5db] bg-white p-1"
+                    dangerouslySetInnerHTML={{
+                      __html: layer.svg
+                        ? tintStencilSvg(layer.svg, layer.colorHex || '#7E86C2')
+                        : `<img alt="Stencil layer ${layer.index + 1}" src="${layer.previewUrl}" />`,
+                    }}
                   />
+                  <div className="mb-2 flex items-center gap-2">
+                    <span
+                      className="inline-block h-3 w-3 rounded-full border border-[#b7a3d6]"
+                      style={{ backgroundColor: layer.colorHex || '#7E86C2' }}
+                    />
+                    <span className="text-[11px] text-[#7f7468]">{layer.colorHex || '#7E86C2'}</span>
+                  </div>
                   <button
                     type="button"
                     onClick={() => onDownloadLayerSvg(layer.index)}
@@ -3200,6 +3313,7 @@ function App() {
             name: layer.name,
             hint: layer.hint,
             previewUrl: layer.previewUrl,
+            colorHex: layer.index === 0 ? '#C76E9A' : '#EFEFEF',
             svg,
           }
         })
@@ -3222,6 +3336,7 @@ function App() {
             cutoffLow: layer.cutoffLow,
             cutoffHigh: layer.cutoffHigh,
             previewUrl: layer.previewUrl,
+            colorHex: layer.colorHex || '#7E86C2',
             svg,
           }
         })
@@ -3304,6 +3419,7 @@ function App() {
         name: String(layer?.name || `Layer ${index + 1}`),
         hint: String(layer?.hint || ''),
         previewUrl: String(layer?.previewUrl || ''),
+        colorHex: normalizeHex(layer?.colorHex) || '#7E86C2',
         svg: String(layer?.svg || ''),
       })),
     }
