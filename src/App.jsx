@@ -705,7 +705,13 @@ function buildStyledPathNode(outputDoc, sourcePath) {
 
 function wrapSvgForStencilCanvas(
   svgString,
-  { paperSize = '5x7', orientation = 'portrait', mode = 'multi', tileScale = 1 } = {},
+  {
+    paperSize = '5x7',
+    orientation = 'portrait',
+    mode = 'multi',
+    tileScale = 1,
+    repeatStyle = 'seamless',
+  } = {},
 ) {
   const parser = new DOMParser()
   const parsed = parser.parseFromString(svgString, 'image/svg+xml')
@@ -735,16 +741,36 @@ function wrapSvgForStencilCanvas(
     const pattern = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'pattern')
     pattern.setAttribute('id', 'tile')
     pattern.setAttribute('patternUnits', 'userSpaceOnUse')
-    pattern.setAttribute('width', String(tileWidth))
-    pattern.setAttribute('height', String(tileHeight))
-
-    const tileGroup = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'g')
-    tileGroup.setAttribute('transform', `scale(${scale})`)
-    sourcePaths.forEach((sourcePath) => {
-      tileGroup.appendChild(buildStyledPathNode(outputDoc, sourcePath))
-    })
-
-    pattern.appendChild(tileGroup)
+    if (repeatStyle === 'seamless') {
+      pattern.setAttribute('width', String(tileWidth * 2))
+      pattern.setAttribute('height', String(tileHeight * 2))
+      const variants = [
+        { tx: 0, ty: 0, fx: 1, fy: 1 },
+        { tx: tileWidth * 2, ty: 0, fx: -1, fy: 1 },
+        { tx: 0, ty: tileHeight * 2, fx: 1, fy: -1 },
+        { tx: tileWidth * 2, ty: tileHeight * 2, fx: -1, fy: -1 },
+      ]
+      variants.forEach((variant) => {
+        const tileGroup = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'g')
+        tileGroup.setAttribute(
+          'transform',
+          `translate(${variant.tx} ${variant.ty}) scale(${variant.fx} ${variant.fy}) scale(${scale})`,
+        )
+        sourcePaths.forEach((sourcePath) => {
+          tileGroup.appendChild(buildStyledPathNode(outputDoc, sourcePath))
+        })
+        pattern.appendChild(tileGroup)
+      })
+    } else {
+      pattern.setAttribute('width', String(tileWidth))
+      pattern.setAttribute('height', String(tileHeight))
+      const tileGroup = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'g')
+      tileGroup.setAttribute('transform', `scale(${scale})`)
+      sourcePaths.forEach((sourcePath) => {
+        tileGroup.appendChild(buildStyledPathNode(outputDoc, sourcePath))
+      })
+      pattern.appendChild(tileGroup)
+    }
     defs.appendChild(pattern)
     outputSvg.appendChild(defs)
 
@@ -2098,6 +2124,39 @@ function StencilStudioPanel({
               {stencilSettings.mode === 'pattern' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Repeat Style</span>
+                    <HelpTip text="Seamless mirrors tiles to remove visible block edges. Direct repeats the exact sample tile." />
+                  </div>
+                  <div className="inline-flex rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-1">
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('repeatStyle', 'seamless')}
+                      className={`rounded-md px-3 py-1 text-xs font-medium ${
+                        stencilSettings.repeatStyle === 'seamless'
+                          ? 'bg-[#a58bc4] text-[#3f3254]'
+                          : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                      }`}
+                    >
+                      Seamless
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('repeatStyle', 'direct')}
+                      className={`rounded-md px-3 py-1 text-xs font-medium ${
+                        stencilSettings.repeatStyle === 'direct'
+                          ? 'bg-[#a58bc4] text-[#3f3254]'
+                          : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                      }`}
+                    >
+                      Direct
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {stencilSettings.mode === 'pattern' ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Pattern Scale ({stencilSettings.tileScale}%)</span>
                     <HelpTip text="Adjusts repeat tile size on the page. Lower means more repeats; higher means larger motifs." />
                   </div>
@@ -2535,6 +2594,7 @@ function App() {
     paperSize: '5x7',
     orientation: 'portrait',
     tileScale: 100,
+    repeatStyle: 'seamless',
     invert: false,
   })
 
@@ -3030,6 +3090,7 @@ function App() {
             orientation: stencilSettings.orientation,
             mode: 'pattern',
             tileScale: stencilSettings.tileScale / 100,
+            repeatStyle: stencilSettings.repeatStyle,
           })
           return {
             index: layer.index,
