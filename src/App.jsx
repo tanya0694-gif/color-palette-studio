@@ -3,7 +3,8 @@ import { supabase, supabaseConfigured } from './lib/supabase'
 
 const STORAGE_KEY = 'palette-studio-data'
 const AUTO_CLOUD_SYNC_KEY = 'palette-studio-auto-cloud-sync'
-const MASTER_LISTS_KEY = 'palette-studio-master-lists'
+const REFERENCE_CATALOG_KEY = 'palette-studio-reference-catalog'
+const LEGACY_MASTER_LISTS_KEY = 'palette-studio-master-lists'
 
 const DEFAULT_DATA = {
   palettes: [],
@@ -29,28 +30,6 @@ const DEFAULT_COLOR = () => ({
 const DEFAULT_PALETTE_COLORS = (count = 5) => Array.from({ length: count }, () => DEFAULT_COLOR())
 
 const PALETTE_TAG_SUGGESTIONS = ['Seasonal', 'Floral', 'Holiday', 'Landscape']
-
-const STARTER_PACKS = [
-  {
-    id: 'holbein-irodori-gouache-autumn',
-    type: 'paints',
-    label: 'Holbein Irodori Gouache (Autumn)',
-    text: `Hex Codes for Holbein Irodori Gouache
-
-Autumn		Antique Rich Gold	#C7A13A
-Autumn		Indigo	#2C3E50
-Autumn		Elm Green	#556B2F
-Autumn		Pine Tree Green	#1B4332
-Autumn		Leek Green	#7A9E3A
-Autumn		Smoked Bamboo	#9C7A3C
-Autumn		Bark Brown	#5A3E2B
-Autumn		Amber	#FFBF00
-Autumn		Amur Cork Yellow	#E6B800
-Autumn		Gardenia Yellow	#F4D03F
-Autumn		Orange	#F26A2E
-Autumn		Safflower Red	#C0392B`,
-  },
-]
 
 function normalizeHex(value) {
   const raw = String(value || '').trim().toUpperCase()
@@ -518,9 +497,11 @@ function normalizeMasterLists(raw) {
 
 function loadMasterLists() {
   try {
-    const raw = localStorage.getItem(MASTER_LISTS_KEY)
-    if (!raw) return normalizeMasterLists(null)
-    return normalizeMasterLists(JSON.parse(raw))
+    const raw = localStorage.getItem(REFERENCE_CATALOG_KEY)
+    if (raw) return normalizeMasterLists(JSON.parse(raw))
+    const legacyRaw = localStorage.getItem(LEGACY_MASTER_LISTS_KEY)
+    if (legacyRaw) return normalizeMasterLists(JSON.parse(legacyRaw))
+    return normalizeMasterLists(null)
   } catch {
     return normalizeMasterLists(null)
   }
@@ -1430,12 +1411,6 @@ function App() {
   const [manageTab, setManageTab] = useState('inks')
   const [expandedBrands, setExpandedBrands] = useState({})
   const [expandedFamilies, setExpandedFamilies] = useState({})
-  const [starterPacksExpandedByTab, setStarterPacksExpandedByTab] = useState({
-    inks: false,
-    cardstock: false,
-    paints: false,
-    markers: false,
-  })
 
   const [manageSuppliesOpen, setManageSuppliesOpen] = useState(false)
   const [addPaletteOpen, setAddPaletteOpen] = useState(false)
@@ -1451,6 +1426,7 @@ function App() {
   const [supplyEditOpen, setSupplyEditOpen] = useState(false)
   const [renameBrandOpen, setRenameBrandOpen] = useState(false)
   const [missingSuppliesOpen, setMissingSuppliesOpen] = useState(false)
+  const [referenceImportOpen, setReferenceImportOpen] = useState(false)
   const [authEmailInput, setAuthEmailInput] = useState('')
   const [authUserEmail, setAuthUserEmail] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
@@ -1478,6 +1454,8 @@ function App() {
   const [importText, setImportText] = useState('')
   const [importError, setImportError] = useState('')
   const [importStatus, setImportStatus] = useState('')
+  const [referenceImportText, setReferenceImportText] = useState('')
+  const [referenceImportError, setReferenceImportError] = useState('')
   const [renameBrandForm, setRenameBrandForm] = useState({ oldName: '', newName: '' })
   const [supplyEditForm, setSupplyEditForm] = useState({
     mode: 'edit',
@@ -1534,6 +1512,8 @@ function App() {
     if (!manageSuppliesOpen) {
       setBrandFeedback('')
       setMissingSuppliesOpen(false)
+      setReferenceImportOpen(false)
+      setReferenceImportError('')
     }
   }, [manageSuppliesOpen])
 
@@ -1551,7 +1531,7 @@ function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(MASTER_LISTS_KEY, JSON.stringify(masterLists))
+      localStorage.setItem(REFERENCE_CATALOG_KEY, JSON.stringify(masterLists))
     } catch {
       // ignore
     }
@@ -2246,37 +2226,6 @@ function App() {
   )
   const paintTypeOptions = ['Acryla Gouache', 'Gouache', 'Watercolor']
   const markerTypeOptions = ['Acrylic', 'Alcohol']
-  const starterPacksForTab = useMemo(() => {
-    return STARTER_PACKS.filter((pack) => pack.type === manageTab)
-      .map((pack) => {
-        try {
-          const parsed = parseSuppliesTextImport(pack.text)
-          const packItems =
-            manageTab === 'inks'
-              ? parsed.inks
-              : manageTab === 'cardstock'
-                ? parsed.cardstock
-                : manageTab === 'paints'
-                  ? parsed.paints
-                  : parsed.markers
-          const installedCount = (packItems || []).filter((item) =>
-            manageItems.some(
-              (existing) =>
-                String(existing.brand || '').toLowerCase() === String(item.brand || '').toLowerCase() &&
-                String(existing.name || '').toLowerCase() === String(item.name || '').toLowerCase(),
-            ),
-          ).length
-          return {
-            ...pack,
-            brand: (packItems && packItems[0]?.brand) || '',
-            itemCount: (packItems || []).length,
-            installedCount,
-          }
-        } catch {
-          return { ...pack, brand: '', itemCount: 0, installedCount: 0, broken: true }
-        }
-      })
-  }, [manageItems, manageTab])
   const missingSuppliesReport = useMemo(() => {
     const masterItems = Array.isArray(masterLists?.[manageTab]) ? masterLists[manageTab] : []
     if (!masterItems.length) {
@@ -2333,10 +2282,6 @@ function App() {
 
   function toggleBrandExpanded(brand) {
     setExpandedBrands((prev) => ({ ...prev, [brand]: !prev[brand] }))
-  }
-
-  function toggleStarterPacksExpanded() {
-    setStarterPacksExpandedByTab((prev) => ({ ...prev, [manageTab]: !prev[manageTab] }))
   }
 
   function toggleFamilyExpanded(brand, family) {
@@ -2579,22 +2524,6 @@ function App() {
     setBrandFeedback(`Deleted brand "${brand}" from ${manageTab}.`)
   }
 
-  function installStarterPack(pack) {
-    try {
-      const parsed = parseSuppliesTextImport(pack.text)
-      const importedCount = mergeImportedPayload(parsed)
-      setBrandFeedback(
-        importedCount > 0
-          ? `Installed starter pack "${pack.label}" (${importedCount} items).`
-          : `Starter pack "${pack.label}" is already installed.`,
-      )
-    } catch (error) {
-      setBrandFeedback(
-        error instanceof Error ? `Starter pack failed: ${error.message}` : 'Starter pack install failed.',
-      )
-    }
-  }
-
   function saveCurrentTabAsMasterList() {
     const source = Array.isArray(manageItems) ? manageItems : []
     const snapshot = source
@@ -2607,13 +2536,66 @@ function App() {
       .filter((item) => item.brand && item.family && item.name && item.hex)
 
     setMasterLists((prev) => ({ ...prev, [manageTab]: snapshot }))
-    setBrandFeedback(`Saved ${snapshot.length} ${manageTab} items as your master list.`)
+    setBrandFeedback(`Saved ${snapshot.length} ${manageTab} items as your reference catalog.`)
   }
 
   function clearCurrentTabMasterList() {
     setMasterLists((prev) => ({ ...prev, [manageTab]: [] }))
     setMissingSuppliesOpen(false)
-    setBrandFeedback(`Cleared master list for ${manageTab}.`)
+    setBrandFeedback(`Cleared reference catalog for ${manageTab}.`)
+  }
+
+  function importReferenceCatalogText() {
+    setReferenceImportError('')
+    try {
+      const parsed = parseSuppliesTextImport(referenceImportText)
+      const parsedType = parsed.inks.length
+        ? 'inks'
+        : parsed.cardstock.length
+          ? 'cardstock'
+          : parsed.paints.length
+            ? 'paints'
+            : parsed.markers.length
+              ? 'markers'
+              : ''
+      if (!parsedType) throw new Error('No valid supplies found in text import')
+      if (parsedType !== manageTab) {
+        throw new Error(
+          `This text is for ${parsedType}. Switch to ${parsedType[0].toUpperCase()}${parsedType.slice(1)} tab to import.`,
+        )
+      }
+
+      const importedItems = parsed[manageTab]
+        .map((item) => ({
+          brand: String(item.brand || '').trim(),
+          family: String(item.family || '').trim(),
+          name: String(item.name || '').trim(),
+          hex: normalizeHex(item.hex) || '',
+        }))
+        .filter((item) => item.brand && item.family && item.name && item.hex)
+
+      if (!importedItems.length) throw new Error('No valid supplies found in text import')
+
+      const importedBrands = [...new Set(importedItems.map((item) => item.brand.toLowerCase()))]
+      setMasterLists((prev) => {
+        const existing = Array.isArray(prev?.[manageTab]) ? prev[manageTab] : []
+        const kept = existing.filter((item) => !importedBrands.includes(String(item.brand || '').toLowerCase()))
+        return {
+          ...prev,
+          [manageTab]: [...kept, ...importedItems],
+        }
+      })
+
+      setReferenceImportText('')
+      setReferenceImportOpen(false)
+      setBrandFeedback(
+        `Reference catalog updated (${importedItems.length} ${manageTab} items across ${importedBrands.length} brand${
+          importedBrands.length === 1 ? '' : 's'
+        }).`,
+      )
+    } catch (error) {
+      setReferenceImportError(error instanceof Error ? error.message : 'Reference import failed')
+    }
   }
 
   async function sendMagicLink() {
@@ -2922,9 +2904,9 @@ function App() {
 
             <div className="space-y-4 p-6">
               <div className="rounded-xl border border-[#e2d8f0] bg-[#f7f2fc] p-4">
-                <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Master List</p>
+                <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Reference Catalog</p>
                 <p className="text-xs text-[#9a8d80]">
-                  Save your current {manageTab} as the reference list, then check what is still missing.
+                  Import full brand lists here, then check what's missing from your owned {manageTab}.
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
@@ -2932,7 +2914,17 @@ function App() {
                     onClick={saveCurrentTabAsMasterList}
                     className="rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
                   >
-                    Save Current as Master
+                    Save Current as Reference
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReferenceImportError('')
+                      setReferenceImportOpen(true)
+                    }}
+                    className="rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
+                  >
+                    Import Reference Text
                   </button>
                   <button
                     type="button"
@@ -2946,11 +2938,11 @@ function App() {
                     onClick={clearCurrentTabMasterList}
                     className="rounded-md border border-[#e8e0d8] bg-white px-3 py-1.5 text-xs font-medium text-[#6b5b4f] hover:bg-[#f5ede6]"
                   >
-                    Clear Master
+                    Clear Reference
                   </button>
                 </div>
                 <p className="mt-2 text-xs text-[#8b7b6b]">
-                  Master size: {(Array.isArray(masterLists?.[manageTab]) ? masterLists[manageTab].length : 0)} items
+                  Reference size: {(Array.isArray(masterLists?.[manageTab]) ? masterLists[manageTab].length : 0)} items
                 </p>
               </div>
 
@@ -3006,7 +2998,7 @@ function App() {
                           className="flex w-full items-center justify-between rounded-t-xl border-b border-[#e6daf7] bg-[#f4eefc] p-4 text-left hover:bg-[#ede3fb]"
                         >
                           <div className="min-w-0 flex-1 pr-3">
-                            <p className="font-display truncate text-xl leading-tight text-[#5e4a7f] md:text-2xl">{brand}</p>
+                            <p className="font-display truncate text-base leading-tight text-[#5e4a7f] md:text-lg">{brand}</p>
                             <p className="mt-2 text-xs text-[#8b7b6b]">
                               {brandFamilies.length} collections • {brandItems.length} {manageTab}
                             </p>
@@ -3736,15 +3728,15 @@ function App() {
         >
           <div className="space-y-3">
             <div className="rounded-lg border border-[#e2d8f0] bg-[#f7f2fc] px-3 py-2 text-sm text-[#5e4a7f]">
-              Missing {missingSuppliesReport.totalMissing} of {missingSuppliesReport.totalExpected} master-list colors.
+              Missing {missingSuppliesReport.totalMissing} of {missingSuppliesReport.totalExpected} reference-catalog colors.
             </div>
             {missingSuppliesReport.totalExpected === 0 ? (
               <div className="rounded-lg border border-dashed border-[#d9cfc4] p-4 text-sm text-[#8b7b6b]">
-                No master list saved for this tab yet. Use "Save Current as Master" in Manage Supplies first.
+                No reference catalog saved for this tab yet. Use "Import Reference Text" or "Save Current as Reference" first.
               </div>
             ) : missingSuppliesReport.totalMissing === 0 ? (
               <div className="rounded-lg border border-[#cfe8d2] bg-[#e9f8ec] p-4 text-sm text-[#386244]">
-                You're complete. All master-list colors are present in this tab.
+                You're complete. All reference-catalog colors are present in this tab.
               </div>
             ) : (
               missingSuppliesReport.brands.map((brandGroup) => (
@@ -3782,6 +3774,45 @@ function App() {
                 </div>
               ))
             )}
+          </div>
+        </ModalShell>
+      ) : null}
+
+      {referenceImportOpen ? (
+        <ModalShell
+          title={`Import Reference Catalog (${manageTab[0].toUpperCase()}${manageTab.slice(1)})`}
+          onClose={() => setReferenceImportOpen(false)}
+          width="max-w-2xl"
+          footer={
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setReferenceImportOpen(false)}
+                className="rounded-xl px-5 py-2.5 text-[#6b5b4f] hover:bg-[#f5ede6]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={importReferenceCatalogText}
+                className="rounded-xl bg-[#a58bc4] px-5 py-2.5 font-medium text-[#3f3254] hover:bg-[#9678b8]"
+              >
+                Import Reference
+              </button>
+            </div>
+          }
+        >
+          <div className="space-y-3">
+            <p className="text-sm text-[#7f7468]">
+              Paste full brand/collection text (for this tab) in the same "Hex Codes for ..." format.
+            </p>
+            <textarea
+              value={referenceImportText}
+              onChange={(e) => setReferenceImportText(e.target.value)}
+              placeholder={`Hex Codes for Brand Name\n\nCollection Name: Example\nColor Name — #AABBCC`}
+              className="h-56 w-full resize-none rounded-xl border border-[#d9cfc4] bg-[#faf7f4] px-4 py-3 font-mono text-xs"
+            />
+            {referenceImportError ? (
+              <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{referenceImportError}</div>
+            ) : null}
           </div>
         </ModalShell>
       ) : null}
