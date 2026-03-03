@@ -1897,6 +1897,31 @@ function StencilStudioPanel({
 }) {
   const [isDragActive, setIsDragActive] = useState(false)
 
+  function HelpTip({ text }) {
+    const [open, setOpen] = useState(false)
+    return (
+      <span className="group relative inline-flex">
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          onBlur={() => setOpen(false)}
+          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[#b9a9d4] bg-[#f4eefc] text-[10px] font-semibold leading-none text-[#6a5986] hover:bg-[#ece2fa]"
+          title={text}
+          aria-label={text}
+        >
+          ?
+        </button>
+        <span
+          className={`pointer-events-none absolute left-1/2 top-6 z-20 w-52 -translate-x-1/2 rounded-md border border-[#d7c7ee] bg-[#fffdfd] px-2 py-1.5 text-[11px] font-normal leading-snug text-[#5e4a7f] shadow-md transition ${
+            open ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+          }`}
+        >
+          {text}
+        </span>
+      </span>
+    )
+  }
+
   function handleDrop(e) {
     e.preventDefault()
     setIsDragActive(false)
@@ -2073,9 +2098,10 @@ function StencilStudioPanel({
 
               {stencilSettings.mode === 'pattern' ? (
                 <div>
-                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                    Pattern Scale ({stencilSettings.tileScale}%)
-                  </label>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Pattern Scale ({stencilSettings.tileScale}%)</span>
+                    <HelpTip text="Adjusts repeat tile size on the page. Lower means more repeats; higher means larger motifs." />
+                  </div>
                   <input
                     type="range"
                     min={45}
@@ -2089,9 +2115,10 @@ function StencilStudioPanel({
 
               {stencilSettings.mode === 'multi' ? (
                 <div>
-                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                    Layers ({stencilSettings.layerCount})
-                  </label>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Layers ({stencilSettings.layerCount})</span>
+                    <HelpTip text="Number of light-to-dark stencil layers. More layers create smoother tonal transitions." />
+                  </div>
                   <input
                     type="range"
                     min={2}
@@ -2104,9 +2131,10 @@ function StencilStudioPanel({
               ) : null}
 
               <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                  Detail ({stencilSettings.detail})
-                </label>
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                  <span>Detail ({stencilSettings.detail})</span>
+                  <HelpTip text="Higher preserves corners and complexity; lower simplifies and smooths shapes." />
+                </div>
                 <input
                   type="range"
                   min={1}
@@ -2118,9 +2146,10 @@ function StencilStudioPanel({
               </div>
 
               <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                  Noise Filter ({stencilSettings.noiseFilter})
-                </label>
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                  <span>Noise Filter ({stencilSettings.noiseFilter})</span>
+                  <HelpTip text="Removes tiny fragments/specks. Keep low (0-2) for intricate designs; increase to clean messy imports." />
+                </div>
                 <input
                   type="range"
                   min={0}
@@ -2132,9 +2161,10 @@ function StencilStudioPanel({
               </div>
 
               <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                  Bridge Width ({stencilSettings.bridgeWidth})
-                </label>
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                  <span>Bridge Width ({stencilSettings.bridgeWidth})</span>
+                  <HelpTip text="Adds stroke thickness and joins for stronger physical stencils. Keep 0 for cleaner pure vector shapes." />
+                </div>
                 <input
                   type="range"
                   min={0}
