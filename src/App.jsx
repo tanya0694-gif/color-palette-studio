@@ -592,7 +592,16 @@ function erodeBinaryMask(imageData, passes = 1) {
   }
 }
 
-function createTwoLayerPatternMasks(img, { detail = 6, invert = false, rotationDeg = 0 } = {}) {
+function createTwoLayerPatternMasks(
+  img,
+  {
+    detail = 6,
+    invert = false,
+    rotationDeg = 0,
+    outlineSource = 'fromFill',
+    outlineWidth = 2,
+  } = {},
+) {
   const { canvas, width, height } = renderImageToCanvas(img, { maxDim: 1400, rotationDeg })
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) throw new Error('Could not create canvas context.')
@@ -707,8 +716,26 @@ function createTwoLayerPatternMasks(img, { detail = 6, invert = false, rotationD
 
   smoothBinaryMask(outlineMask, passes)
   smoothBinaryMask(fillMask, passes)
+
+  if (outlineSource === 'fromFill') {
+    const grownFill = new ImageData(new Uint8ClampedArray(fillMask.data), width, height)
+    dilateBinaryMask(grownFill, Math.max(1, Math.min(8, Math.round(outlineWidth))))
+    for (let i = 0; i < outlineMask.data.length; i += 4) {
+      const inGrown = grownFill.data[i] < 128
+      const inFill = fillMask.data[i] < 128
+      const inContent = contentMask.data[i] < 128
+      const isRing = inGrown && !inFill && inContent
+      const value = isRing ? 0 : 255
+      outlineMask.data[i] = value
+      outlineMask.data[i + 1] = value
+      outlineMask.data[i + 2] = value
+      outlineMask.data[i + 3] = 255
+    }
+    smoothBinaryMask(outlineMask, 1)
+  }
+
   // If outline became too sparse, relax one step by borrowing localized content edges.
-  if (outlinePixelCount < width * height * 0.002) {
+  if (outlineSource !== 'fromFill' && outlinePixelCount < width * height * 0.002) {
     for (let i = 0; i < outlineMask.data.length; i += 4) {
       const softened = contentMask.data[i] < 128 && fillNeighborhoodMask.data[i] < 128 ? 0 : 255
       outlineMask.data[i] = softened
@@ -2396,6 +2423,56 @@ function StencilStudioPanel({
               {stencilSettings.mode === 'pattern' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Outline Source</span>
+                    <HelpTip text="From Fill builds the thin line layer by expanding the fill mask. Auto Detect tries to read white lines directly from the image." />
+                  </div>
+                  <div className="inline-flex rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-1">
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('outlineSource', 'fromFill')}
+                      className={`rounded-md px-3 py-1 text-xs font-medium ${
+                        stencilSettings.outlineSource === 'fromFill'
+                          ? 'bg-[#a58bc4] text-[#3f3254]'
+                          : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                      }`}
+                    >
+                      From Fill
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('outlineSource', 'auto')}
+                      className={`rounded-md px-3 py-1 text-xs font-medium ${
+                        stencilSettings.outlineSource === 'auto'
+                          ? 'bg-[#a58bc4] text-[#3f3254]'
+                          : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                      }`}
+                    >
+                      Auto Detect
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {stencilSettings.mode === 'pattern' && stencilSettings.outlineSource === 'fromFill' ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Outline Width ({stencilSettings.outlineWidth})</span>
+                    <HelpTip text="Thickness of the generated line layer around fill motifs." />
+                  </div>
+                  <input
+                    type="range"
+                    min={1}
+                    max={6}
+                    value={stencilSettings.outlineWidth}
+                    onChange={(e) => onUpdateSetting('outlineWidth', Number(e.target.value))}
+                    className="w-full accent-[#9678b8]"
+                  />
+                </div>
+              ) : null}
+
+              {stencilSettings.mode === 'pattern' ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Pattern Scale ({stencilSettings.tileScale}%)</span>
                     <HelpTip text="Adjusts repeat tile size on the page. Lower means more repeats; higher means larger motifs." />
                   </div>
@@ -2873,6 +2950,8 @@ function App() {
     orientation: 'portrait',
     tileScale: 100,
     repeatStyle: 'seamless',
+    outlineSource: 'fromFill',
+    outlineWidth: 2,
     autoStraighten: true,
     straightenAdjust: 0,
     invert: false,
@@ -3382,7 +3461,12 @@ function App() {
           return {
             index: layer.index,
             name: layer.name,
-            hint: layer.hint,
+            hint:
+              layer.name === 'Outline Layer'
+                ? stencilSettings.outlineSource === 'fromFill'
+                  ? `Generated from fill (width ${stencilSettings.outlineWidth})`
+                  : 'White linework'
+                : layer.hint,
             previewUrl: layer.previewUrl,
             colorHex: layer.index === 0 ? '#C76E9A' : '#8D8D8D',
             svg,
