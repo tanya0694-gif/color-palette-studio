@@ -3740,7 +3740,9 @@ function App() {
         >
           <div className="space-y-3">
             <div className="rounded-lg border border-[#e2d8f0] bg-[#f7f2fc] px-3 py-2 text-sm text-[#5e4a7f]">
-              Missing {missingSuppliesReport.totalMissing} of {missingSuppliesReport.totalExpected} reference-catalog colors.
+              {missingSuppliesReport.totalMissing > 0
+                ? `Looks like you're still missing ${missingSuppliesReport.totalMissing} of ${missingSuppliesReport.totalExpected} reference-catalog colors.`
+                : `Amazing! You have it all. (${missingSuppliesReport.totalExpected}/${missingSuppliesReport.totalExpected})`}
             </div>
             {missingSuppliesReport.totalExpected === 0 ? (
               <div className="rounded-lg border border-dashed border-[#d9cfc4] p-4 text-sm text-[#8b7b6b]">
@@ -3748,43 +3750,56 @@ function App() {
               </div>
             ) : missingSuppliesReport.totalMissing === 0 ? (
               <div className="rounded-lg border border-[#cfe8d2] bg-[#e9f8ec] p-4 text-sm text-[#386244]">
-                You're complete. All reference-catalog colors are present in this tab.
+                Amazing! You have it all.
               </div>
             ) : (
-              missingSuppliesReport.brands.map((brandGroup) => (
-                <div key={brandGroup.brand} className="rounded-xl border border-[#e8e0d8] bg-white">
-                  <div className="border-b border-[#eee5db] px-4 py-3">
-                    <p className="text-sm font-semibold text-[#5c4a3d]">{brandGroup.brand}</p>
-                    <p className="text-xs text-[#8b7b6b]">
-                      {brandGroup.missingCount} missing
-                    </p>
-                  </div>
-                  <div className="space-y-3 px-4 py-3">
-                    {brandGroup.families.map(({ family, items }) => (
-                      <div key={`${brandGroup.brand}-${family}`} className="rounded-lg border border-[#ebe2d8] bg-[#fcfbf9] p-3">
-                        <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">{family}</p>
-                        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                          {items.map((item) => (
-                            <div
-                              key={`${brandGroup.brand}-${family}-${item.name}-${item.hex}`}
-                              className="flex items-center gap-2 rounded-lg border border-[#ebe2d8] bg-white px-2.5 py-2"
-                            >
-                              <div
-                                className="h-6 w-6 rounded-md border-2 border-white shadow-sm ring-1 ring-black/10"
-                                style={{ backgroundColor: normalizeHex(item.hex) || '#000000' }}
-                              />
-                              <div className="min-w-0">
-                                <p className="truncate text-sm text-[#5c4a3d]">{item.name}</p>
-                                <p className="font-mono text-xs text-[#8b7b6b]">{normalizeHex(item.hex) || item.hex}</p>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
+              <>
+                <div className="rounded-lg border border-[#e8e0d8] bg-white px-3 py-2">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Missing by Brand</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {missingSuppliesReport.brands.map((brandGroup) => (
+                      <span
+                        key={`missing-summary-${brandGroup.brand}`}
+                        className="rounded-full border border-[#d7c7ee] bg-[#f4eefc] px-2.5 py-1 text-xs text-[#5e4a7f]"
+                      >
+                        {brandGroup.brand}: {brandGroup.missingCount}
+                      </span>
                     ))}
                   </div>
                 </div>
-              ))
+                {missingSuppliesReport.brands.map((brandGroup) => (
+                  <div key={brandGroup.brand} className="rounded-xl border border-[#e8e0d8] bg-white">
+                    <div className="border-b border-[#eee5db] px-4 py-3">
+                      <p className="text-sm font-semibold text-[#5c4a3d]">{brandGroup.brand}</p>
+                      <p className="text-xs text-[#8b7b6b]">{brandGroup.missingCount} missing</p>
+                    </div>
+                    <div className="space-y-3 px-4 py-3">
+                      {brandGroup.families.map(({ family, items }) => (
+                        <div key={`${brandGroup.brand}-${family}`} className="rounded-lg border border-[#ebe2d8] bg-[#fcfbf9] p-3">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">{family}</p>
+                          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            {items.map((item) => (
+                              <div
+                                key={`${brandGroup.brand}-${family}-${item.name}-${item.hex}`}
+                                className="flex items-center gap-2 rounded-lg border border-[#ebe2d8] bg-white px-2.5 py-2"
+                              >
+                                <div
+                                  className="h-6 w-6 rounded-md border-2 border-white shadow-sm ring-1 ring-black/10"
+                                  style={{ backgroundColor: normalizeHex(item.hex) || '#000000' }}
+                                />
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm text-[#5c4a3d]">{item.name}</p>
+                                  <p className="font-mono text-xs text-[#8b7b6b]">{normalizeHex(item.hex) || item.hex}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </>
             )}
           </div>
         </ModalShell>
