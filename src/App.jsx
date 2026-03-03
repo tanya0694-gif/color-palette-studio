@@ -3008,7 +3008,9 @@ function App() {
                           className="flex w-full items-center justify-between rounded-t-xl border-b border-[#e6daf7] bg-[#f4eefc] px-4 py-3 text-left hover:bg-[#ede3fb]"
                         >
                           <div className="min-w-0 flex flex-1 items-center gap-3 pr-3">
-                            <p className="font-display truncate text-base leading-tight text-[#4f4068] md:text-lg">{brand}</p>
+                            <p className="font-display truncate text-base font-semibold leading-tight text-[#4f4068] md:text-lg">
+                              {brand}
+                            </p>
                             <p className="shrink-0 rounded-full border border-[#d7c7ee] bg-white/75 px-2.5 py-0.5 text-xs font-medium text-[#7c6b93]">
                               {brandFamilies.length} collections • {brandItems.length} {manageTab}
                             </p>
