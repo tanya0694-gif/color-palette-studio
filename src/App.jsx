@@ -2236,40 +2236,53 @@ function App() {
       return { brands: [], totalMissing: 0, totalExpected: 0 }
     }
 
-    const missingItems = masterItems.filter((item) => {
-      const targetHex = normalizeHex(item.hex)
-      const targetName = normalizeNameKey(item.name)
-      const targetBrand = String(item.brand || '').toLowerCase()
-      return !manageItems.some((existing) => {
-        if (String(existing.brand || '').toLowerCase() !== targetBrand) return false
-        const existingHex = normalizeHex(existing.hex)
-        const existingName = normalizeNameKey(existing.name)
-        return (targetHex && existingHex === targetHex) || existingName === targetName
-      })
-    })
-
-    const byBrand = missingItems.reduce((acc, item) => {
+    const byBrandReference = masterItems.reduce((acc, item) => {
       const brand = String(item.brand || 'Unknown Brand').trim()
-      const family = String(item.family || 'Uncategorized').trim()
-      if (!acc[brand]) acc[brand] = {}
-      if (!acc[brand][family]) acc[brand][family] = []
-      acc[brand][family].push(item)
+      if (!acc[brand]) acc[brand] = []
+      acc[brand].push(item)
       return acc
     }, {})
 
-    const brands = Object.entries(byBrand)
+    const brands = Object.entries(byBrandReference)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([brand, families]) => ({
-        brand,
-        missingCount: Object.values(families).reduce((sum, items) => sum + items.length, 0),
-        families: Object.entries(families)
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([family, items]) => ({ family, items })),
-      }))
+      .map(([brand, referenceItems]) => {
+        const brandKey = String(brand).toLowerCase()
+        const ownedForBrand = manageItems.filter((existing) => String(existing.brand || '').toLowerCase() === brandKey)
+
+        const missingItems = referenceItems.filter((item) => {
+          const targetHex = normalizeHex(item.hex)
+          const targetName = normalizeNameKey(item.name)
+          return !ownedForBrand.some((existing) => {
+            const existingHex = normalizeHex(existing.hex)
+            const existingName = normalizeNameKey(existing.name)
+            return (targetHex && existingHex === targetHex) || existingName === targetName
+          })
+        })
+
+        const missingByFamily = missingItems.reduce((acc, item) => {
+          const family = String(item.family || 'Uncategorized').trim()
+          if (!acc[family]) acc[family] = []
+          acc[family].push(item)
+          return acc
+        }, {})
+
+        const total = referenceItems.length
+        const missingCount = missingItems.length
+        const ownedCount = total - missingCount
+        return {
+          brand,
+          total,
+          ownedCount,
+          missingCount,
+          families: Object.entries(missingByFamily)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([family, items]) => ({ family, items })),
+        }
+      })
 
     return {
       brands,
-      totalMissing: missingItems.length,
+      totalMissing: brands.reduce((sum, brand) => sum + brand.missingCount, 0),
       totalExpected: masterItems.length,
     }
   }, [manageItems, manageTab, masterLists])
@@ -3764,9 +3777,15 @@ function App() {
                     {missingSuppliesReport.brands.map((brandGroup) => (
                       <span
                         key={`missing-summary-${brandGroup.brand}`}
-                        className="rounded-full border border-[#d7c7ee] bg-[#f4eefc] px-2.5 py-1 text-xs text-[#5e4a7f]"
+                        className={`rounded-full border px-2.5 py-1 text-xs ${
+                          brandGroup.missingCount > 0
+                            ? 'border-[#d7c7ee] bg-[#f4eefc] text-[#5e4a7f]'
+                            : 'border-[#cfe8d2] bg-[#e9f8ec] text-[#386244]'
+                        }`}
                       >
-                        {brandGroup.brand}: {brandGroup.missingCount}
+                        {brandGroup.missingCount > 0
+                          ? `${brandGroup.brand}: missing ${brandGroup.missingCount} / ${brandGroup.total}`
+                          : `${brandGroup.brand}: ${brandGroup.total} / ${brandGroup.total} complete`}
                       </span>
                     ))}
                   </div>
@@ -3775,10 +3794,19 @@ function App() {
                   <div key={brandGroup.brand} className="rounded-xl border border-[#e8e0d8] bg-white">
                     <div className="border-b border-[#eee5db] px-4 py-3">
                       <p className="text-sm font-semibold text-[#5c4a3d]">{brandGroup.brand}</p>
-                      <p className="text-xs text-[#8b7b6b]">{brandGroup.missingCount} missing</p>
+                      <p className="text-xs text-[#8b7b6b]">
+                        {brandGroup.missingCount > 0
+                          ? `Missing ${brandGroup.missingCount} out of ${brandGroup.total}. You have ${brandGroup.ownedCount} out of ${brandGroup.total}.`
+                          : `You have ${brandGroup.ownedCount} out of ${brandGroup.total}, yay!`}
+                      </p>
                     </div>
-                    <div className="space-y-3 px-4 py-3">
-                    {brandGroup.families.map(({ family, items }) => (
+                  <div className="space-y-3 px-4 py-3">
+                    {brandGroup.missingCount === 0 ? (
+                      <div className="rounded-lg border border-[#cfe8d2] bg-[#e9f8ec] px-3 py-2 text-sm text-[#386244]">
+                        Amazing! You have it all for this brand.
+                      </div>
+                    ) : (
+                      brandGroup.families.map(({ family, items }) => (
                       (() => {
                         const familyKey = `${manageTab}::${brandGroup.brand}::${family}`
                         const isExpanded = Boolean(missingExpandedFamilies[familyKey])
@@ -3821,7 +3849,7 @@ function App() {
                           </div>
                         )
                       })()
-                    ))}
+                    )))}
                   </div>
                 </div>
                 ))}
