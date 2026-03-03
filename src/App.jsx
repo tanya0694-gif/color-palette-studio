@@ -286,19 +286,113 @@ async function readFileAsDataUrl(file) {
   })
 }
 
-function createStencilImageData(img, { threshold = 140, invert = false, detail = 6 } = {}) {
-  const maxDim = 1200
+function normalizeAngleForGrid(angleDeg) {
+  let angle = Number(angleDeg) || 0
+  while (angle <= -45) angle += 90
+  while (angle > 45) angle -= 90
+  return angle
+}
+
+function estimateDominantGridAngle(img) {
+  const maxDim = 420
   const scale = Math.min(1, maxDim / Math.max(img.width, img.height))
-  const width = Math.max(1, Math.round(img.width * scale))
-  const height = Math.max(1, Math.round(img.height * scale))
+  const width = Math.max(2, Math.round(img.width * scale))
+  const height = Math.max(2, Math.round(img.height * scale))
 
   const canvas = document.createElement('canvas')
   canvas.width = width
   canvas.height = height
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
-  if (!ctx) throw new Error('Could not create canvas context.')
+  if (!ctx) return 0
 
   ctx.drawImage(img, 0, 0, width, height)
+  const { data } = ctx.getImageData(0, 0, width, height)
+  const gray = new Float32Array(width * height)
+  for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
+    gray[p] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
+  }
+
+  const bins = 181
+  const hist = new Float64Array(bins)
+  let strongest = 0
+
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const i = y * width + x
+      const gx =
+        -gray[i - width - 1] +
+        gray[i - width + 1] +
+        -2 * gray[i - 1] +
+        2 * gray[i + 1] +
+        -gray[i + width - 1] +
+        gray[i + width + 1]
+      const gy =
+        gray[i - width - 1] +
+        2 * gray[i - width] +
+        gray[i - width + 1] +
+        -gray[i + width - 1] +
+        -2 * gray[i + width] +
+        -gray[i + width + 1]
+      const magnitude = Math.hypot(gx, gy)
+      if (magnitude < 26) continue
+      if (magnitude > strongest) strongest = magnitude
+
+      const edgeAngleDeg = (Math.atan2(gy, gx) * 180) / Math.PI
+      const lineAngleDeg = normalizeAngleForGrid(edgeAngleDeg + 90)
+      const bin = Math.max(0, Math.min(bins - 1, Math.round(lineAngleDeg + 90)))
+      hist[bin] += magnitude
+    }
+  }
+
+  if (strongest < 34) return 0
+  let bestBin = -1
+  let bestValue = 0
+  for (let i = 0; i < hist.length; i += 1) {
+    if (hist[i] > bestValue) {
+      bestValue = hist[i]
+      bestBin = i
+    }
+  }
+  if (bestBin < 0) return 0
+  const angle = bestBin - 90
+  const corrected = normalizeAngleForGrid(angle)
+  if (Math.abs(corrected) < 0.8) return 0
+  return Math.max(-20, Math.min(20, corrected))
+}
+
+function renderImageToCanvas(img, { maxDim = 1200, rotationDeg = 0 } = {}) {
+  const scale = Math.min(1, maxDim / Math.max(img.width, img.height))
+  const drawWidth = Math.max(1, Math.round(img.width * scale))
+  const drawHeight = Math.max(1, Math.round(img.height * scale))
+  const radians = ((Number(rotationDeg) || 0) * Math.PI) / 180
+  const absCos = Math.abs(Math.cos(radians))
+  const absSin = Math.abs(Math.sin(radians))
+  const outWidth = Math.max(1, Math.round(drawWidth * absCos + drawHeight * absSin))
+  const outHeight = Math.max(1, Math.round(drawWidth * absSin + drawHeight * absCos))
+
+  const canvas = document.createElement('canvas')
+  canvas.width = outWidth
+  canvas.height = outHeight
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) throw new Error('Could not create canvas context.')
+
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, outWidth, outHeight)
+  ctx.translate(outWidth / 2, outHeight / 2)
+  ctx.rotate(radians)
+  ctx.drawImage(img, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight)
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+
+  return { canvas, width: outWidth, height: outHeight }
+}
+
+function createStencilImageData(
+  img,
+  { threshold = 140, invert = false, detail = 6, rotationDeg = 0 } = {},
+) {
+  const { canvas, width, height } = renderImageToCanvas(img, { maxDim: 1200, rotationDeg })
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) throw new Error('Could not create canvas context.')
   const imageData = ctx.getImageData(0, 0, width, height)
   const { data } = imageData
   const quantizeStep = Math.max(1, Math.round((11 - Math.max(1, Math.min(10, detail))) * 2))
@@ -339,20 +433,12 @@ function createStencilImageData(img, { threshold = 140, invert = false, detail =
 
 function createPosterizedStencilLayers(
   img,
-  { layerCount = 3, invert = false, detail = 6 } = {},
+  { layerCount = 3, invert = false, detail = 6, rotationDeg = 0 } = {},
 ) {
-  const maxDim = 1200
-  const scale = Math.min(1, maxDim / Math.max(img.width, img.height))
-  const width = Math.max(1, Math.round(img.width * scale))
-  const height = Math.max(1, Math.round(img.height * scale))
-
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
+  const { canvas, width, height } = renderImageToCanvas(img, { maxDim: 1200, rotationDeg })
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) throw new Error('Could not create canvas context.')
 
-  ctx.drawImage(img, 0, 0, width, height)
   const source = ctx.getImageData(0, 0, width, height)
   const steps = Math.max(2, Math.min(6, Math.round(layerCount)))
   const quantizeStep = Math.max(1, Math.round((11 - Math.max(1, Math.min(10, detail))) * 2))
@@ -487,19 +573,11 @@ function erodeBinaryMask(imageData, passes = 1) {
   }
 }
 
-function createTwoLayerPatternMasks(img, { detail = 6, invert = false } = {}) {
-  const maxDim = 1400
-  const scale = Math.min(1, maxDim / Math.max(img.width, img.height))
-  const width = Math.max(1, Math.round(img.width * scale))
-  const height = Math.max(1, Math.round(img.height * scale))
-
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
+function createTwoLayerPatternMasks(img, { detail = 6, invert = false, rotationDeg = 0 } = {}) {
+  const { canvas, width, height } = renderImageToCanvas(img, { maxDim: 1400, rotationDeg })
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) throw new Error('Could not create canvas context.')
 
-  ctx.drawImage(img, 0, 0, width, height)
   const source = ctx.getImageData(0, 0, width, height)
   const lightValues = []
   const satValues = []
@@ -1910,6 +1988,7 @@ function StencilStudioPanel({
   stencilLayers,
   stencilLibrary,
   stencilSettings,
+  stencilStraightenAngle,
   stencilBusy,
   stencilError,
   onImageChange,
@@ -2029,6 +2108,22 @@ function StencilStudioPanel({
                   />
                   <p className="mt-1 px-1 text-[11px] text-[#8b7b6b]">Or drag and drop an image here</p>
                 </div>
+                <label className="mt-2 flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(stencilSettings.autoStraighten)}
+                    onChange={(e) => onUpdateSetting('autoStraighten', e.target.checked)}
+                    className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
+                  />
+                  Auto straighten image angle
+                  <HelpTip text="Detects the dominant pattern angle and rotates before vectorizing. Helpful for tilted phone photos." />
+                </label>
+                {Math.abs(stencilStraightenAngle) > 0.01 ? (
+                  <p className="mt-1 text-[11px] text-[#7f7468]">
+                    Applied straighten: {stencilStraightenAngle > 0 ? '+' : ''}
+                    {stencilStraightenAngle.toFixed(1)}°
+                  </p>
+                ) : null}
               </div>
 
               <div>
@@ -2584,6 +2679,7 @@ function App() {
   const [stencilLibrary, setStencilLibrary] = useState(loadStencilLibrary)
   const [stencilBusy, setStencilBusy] = useState(false)
   const [stencilError, setStencilError] = useState('')
+  const [stencilStraightenAngle, setStencilStraightenAngle] = useState(0)
   const [stencilSettings, setStencilSettings] = useState({
     mode: 'multi',
     threshold: 140,
@@ -2595,6 +2691,7 @@ function App() {
     orientation: 'portrait',
     tileScale: 100,
     repeatStyle: 'seamless',
+    autoStraighten: true,
     invert: false,
   })
 
@@ -3044,6 +3141,7 @@ function App() {
     setStencilError('')
     setStencilImageFile(file || null)
     setStencilSourceDataUrl('')
+    setStencilStraightenAngle(0)
     setStencilSvg('')
     setStencilLayers([])
     setStencilProcessedPreviewUrl('')
@@ -3065,6 +3163,9 @@ function App() {
 
   function updateStencilSetting(field, value) {
     setStencilSettings((prev) => ({ ...prev, [field]: value }))
+    if (field === 'autoStraighten') {
+      setStencilStraightenAngle(0)
+    }
     setStencilSvg('')
     setStencilLayers([])
     setStencilProcessedPreviewUrl('')
@@ -3081,8 +3182,10 @@ function App() {
       setStencilError('')
       setStencilLayers([])
       const image = await loadImageFromFile(stencilImageFile)
+      const rotationDeg = stencilSettings.autoStraighten ? -estimateDominantGridAngle(image) : 0
+      setStencilStraightenAngle(rotationDeg)
       if (stencilSettings.mode === 'pattern') {
-        const pairLayers = createTwoLayerPatternMasks(image, stencilSettings)
+        const pairLayers = createTwoLayerPatternMasks(image, { ...stencilSettings, rotationDeg })
         const layerSvgs = pairLayers.map((layer) => {
           const rawSvg = buildStencilSvg(layer.imageData, { ...stencilSettings, noiseFilter: 1 })
           const svg = wrapSvgForStencilCanvas(rawSvg, {
@@ -3104,7 +3207,7 @@ function App() {
         setStencilSvg(layerSvgs[0]?.svg || '')
         setStencilLayers(layerSvgs)
       } else if (stencilSettings.mode === 'multi') {
-        const posterizedLayers = createPosterizedStencilLayers(image, stencilSettings)
+        const posterizedLayers = createPosterizedStencilLayers(image, { ...stencilSettings, rotationDeg })
         const layerSvgs = posterizedLayers.map((layer) => {
           const rawSvg = buildStencilSvg(layer.imageData, stencilSettings)
           const svg = wrapSvgForStencilCanvas(rawSvg, {
@@ -3126,7 +3229,7 @@ function App() {
         setStencilSvg(layerSvgs[0]?.svg || '')
         setStencilLayers(layerSvgs)
       } else {
-        const processed = createStencilImageData(image, stencilSettings)
+        const processed = createStencilImageData(image, { ...stencilSettings, rotationDeg })
         const rawSvg = buildStencilSvg(processed.imageData, stencilSettings)
         const svg = wrapSvgForStencilCanvas(rawSvg, {
           paperSize: stencilSettings.paperSize,
@@ -4235,6 +4338,7 @@ function App() {
           stencilLayers={stencilLayers}
           stencilLibrary={stencilLibrary}
           stencilSettings={stencilSettings}
+          stencilStraightenAngle={stencilStraightenAngle}
           stencilBusy={stencilBusy}
           stencilError={stencilError}
           onImageChange={(file) => void handleStencilImageFileChange(file)}
