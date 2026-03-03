@@ -391,9 +391,152 @@ function createPosterizedStencilLayers(
   })
 }
 
+function percentile(values, ratio) {
+  if (!values.length) return 0
+  const sorted = values.slice().sort((a, b) => a - b)
+  const index = Math.max(0, Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * ratio)))
+  return sorted[index]
+}
+
+function smoothBinaryMask(imageData, passes = 1) {
+  const { data, width, height } = imageData
+  for (let pass = 0; pass < passes; pass += 1) {
+    const source = new Uint8ClampedArray(data)
+    for (let y = 1; y < height - 1; y += 1) {
+      for (let x = 1; x < width - 1; x += 1) {
+        const idx = (y * width + x) * 4
+        let blackNeighbors = 0
+        for (let oy = -1; oy <= 1; oy += 1) {
+          for (let ox = -1; ox <= 1; ox += 1) {
+            const nIdx = ((y + oy) * width + (x + ox)) * 4
+            if (source[nIdx] < 128) blackNeighbors += 1
+          }
+        }
+        const next = blackNeighbors >= 5 ? 0 : 255
+        data[idx] = next
+        data[idx + 1] = next
+        data[idx + 2] = next
+        data[idx + 3] = 255
+      }
+    }
+  }
+}
+
+function createTwoLayerPatternMasks(img, { detail = 6, invert = false } = {}) {
+  const maxDim = 1400
+  const scale = Math.min(1, maxDim / Math.max(img.width, img.height))
+  const width = Math.max(1, Math.round(img.width * scale))
+  const height = Math.max(1, Math.round(img.height * scale))
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) throw new Error('Could not create canvas context.')
+
+  ctx.drawImage(img, 0, 0, width, height)
+  const source = ctx.getImageData(0, 0, width, height)
+  const lightValues = []
+  const satValues = []
+
+  for (let i = 0; i < source.data.length; i += 4) {
+    const r = source.data[i]
+    const g = source.data[i + 1]
+    const b = source.data[i + 2]
+    const a = source.data[i + 3]
+    if (a < 15) continue
+    const max = Math.max(r, g, b)
+    const min = Math.min(r, g, b)
+    const light = (max + min) / 2
+    const sat = max === 0 ? 0 : ((max - min) / max) * 255
+    lightValues.push(light)
+    satValues.push(sat)
+  }
+
+  const brightThreshold = Math.max(205, percentile(lightValues, 0.9) - 8)
+  const lowSatThreshold = Math.max(26, percentile(satValues, 0.25))
+  const fillSatThreshold = Math.max(40, percentile(satValues, 0.6))
+  const fillDarkThreshold = Math.max(55, percentile(lightValues, 0.15))
+  const fillLightThreshold = Math.min(210, percentile(lightValues, 0.8))
+  const passes = detail >= 7 ? 1 : 2
+
+  const outlineMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
+  const fillMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
+
+  for (let i = 0; i < source.data.length; i += 4) {
+    const r = source.data[i]
+    const g = source.data[i + 1]
+    const b = source.data[i + 2]
+    const a = source.data[i + 3]
+
+    if (a < 15) {
+      outlineMask.data[i] = 255
+      outlineMask.data[i + 1] = 255
+      outlineMask.data[i + 2] = 255
+      outlineMask.data[i + 3] = 255
+      fillMask.data[i] = 255
+      fillMask.data[i + 1] = 255
+      fillMask.data[i + 2] = 255
+      fillMask.data[i + 3] = 255
+      continue
+    }
+
+    const max = Math.max(r, g, b)
+    const min = Math.min(r, g, b)
+    const light = (max + min) / 2
+    const sat = max === 0 ? 0 : ((max - min) / max) * 255
+
+    const isLikelyOutline = light >= brightThreshold && sat <= lowSatThreshold * 1.15
+    const isLikelyFill = sat >= fillSatThreshold && light >= fillDarkThreshold && light <= fillLightThreshold
+
+    let outlineValue = isLikelyOutline ? 0 : 255
+    let fillValue = isLikelyFill ? 0 : 255
+    if (invert) {
+      outlineValue = outlineValue === 0 ? 255 : 0
+      fillValue = fillValue === 0 ? 255 : 0
+    }
+
+    outlineMask.data[i] = outlineValue
+    outlineMask.data[i + 1] = outlineValue
+    outlineMask.data[i + 2] = outlineValue
+    outlineMask.data[i + 3] = 255
+
+    fillMask.data[i] = fillValue
+    fillMask.data[i + 1] = fillValue
+    fillMask.data[i + 2] = fillValue
+    fillMask.data[i + 3] = 255
+  }
+
+  smoothBinaryMask(outlineMask, passes)
+  smoothBinaryMask(fillMask, passes)
+
+  ctx.putImageData(fillMask, 0, 0)
+  const fillPreview = canvas.toDataURL('image/png')
+  ctx.putImageData(outlineMask, 0, 0)
+  const outlinePreview = canvas.toDataURL('image/png')
+
+  return [
+    {
+      index: 0,
+      name: 'Fill Layer',
+      hint: 'Inner motifs',
+      imageData: fillMask,
+      previewUrl: fillPreview,
+    },
+    {
+      index: 1,
+      name: 'Outline Layer',
+      hint: 'White linework',
+      imageData: outlineMask,
+      previewUrl: outlinePreview,
+    },
+  ]
+}
+
 function buildStencilSvg(imageData, { detail = 6, noiseFilter = 10, bridgeWidth = 0 }) {
   const tunedDetail = Math.max(1, Math.min(10, detail))
   const tunedNoise = Math.max(0, Math.min(30, noiseFilter))
+  const smoothness = 11 - tunedDetail
   const options = {
     colorsampling: 0,
     colorquantcycles: 1,
@@ -401,11 +544,11 @@ function buildStencilSvg(imageData, { detail = 6, noiseFilter = 10, bridgeWidth 
     layering: 0,
     pathomit: tunedNoise,
     rightangleenhance: true,
-    linefilter: false,
-    ltres: 2 - tunedDetail * 0.15,
-    qtres: 2 - tunedDetail * 0.15,
+    linefilter: true,
+    ltres: 0.72 + smoothness * 0.14,
+    qtres: 0.72 + smoothness * 0.14,
     strokewidth: 0,
-    roundcoords: 1,
+    roundcoords: 2,
     viewbox: true,
     pal: [
       { r: 0, g: 0, b: 0, a: 255 },
@@ -1532,6 +1675,17 @@ function StencilStudioPanel({
   onDownloadSvg,
   onDownloadLayerSvg,
 }) {
+  const [isDragActive, setIsDragActive] = useState(false)
+
+  function handleDrop(e) {
+    e.preventDefault()
+    setIsDragActive(false)
+    const file = e.dataTransfer?.files?.[0] || null
+    if (file && file.type.startsWith('image/')) {
+      onImageChange(file)
+    }
+  }
+
   return (
     <main className="flex-1 w-full max-w-7xl self-center overflow-auto px-4 py-4 md:px-6 md:py-6">
       <section className="rounded-2xl border border-[#e8e0d8] bg-white/75 p-4 shadow-sm md:rounded-3xl md:p-6">
@@ -1569,12 +1723,34 @@ function StencilStudioPanel({
                 <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                   Source Image
                 </label>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => onImageChange(e.target.files?.[0] || null)}
-                  className="w-full rounded-lg border border-[#d9cfc4] bg-white p-2 text-sm"
-                />
+                <div
+                  onDragEnter={(e) => {
+                    e.preventDefault()
+                    setIsDragActive(true)
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault()
+                    setIsDragActive(true)
+                  }}
+                  onDragLeave={(e) => {
+                    e.preventDefault()
+                    setIsDragActive(false)
+                  }}
+                  onDrop={handleDrop}
+                  className={`rounded-lg border-2 border-dashed p-2 transition ${
+                    isDragActive
+                      ? 'border-[#9678b8] bg-[#f5effd]'
+                      : 'border-[#d9cfc4] bg-white'
+                  }`}
+                >
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => onImageChange(e.target.files?.[0] || null)}
+                    className="w-full rounded-lg border border-[#d9cfc4] bg-white p-2 text-sm"
+                  />
+                  <p className="mt-1 px-1 text-[11px] text-[#8b7b6b]">Or drag and drop an image here</p>
+                </div>
               </div>
 
               <div>
@@ -1603,6 +1779,17 @@ function StencilStudioPanel({
                     }`}
                   >
                     Multi-layer
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSetting('mode', 'pattern')}
+                    className={`rounded-md px-3 py-1 text-xs font-medium ${
+                      stencilSettings.mode === 'pattern'
+                        ? 'bg-[#a58bc4] text-[#3f3254]'
+                        : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                    }`}
+                  >
+                    Pattern 2-layer
                   </button>
                 </div>
               </div>
@@ -1733,7 +1920,9 @@ function StencilStudioPanel({
           <div className="mb-2 flex items-center justify-between gap-2">
             <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Vector Output</p>
             <p className="text-xs text-[#9a8d80]">
-              {stencilSettings.mode === 'multi'
+              {stencilSettings.mode === 'pattern'
+                ? 'Pattern mode: first layer preview shown (fills), second layer in Generated Layers.'
+                : stencilSettings.mode === 'multi'
                 ? `Layer 1 preview shown here. ${stencilLayers.length} layers generated.`
                 : 'Black areas are stencil cut geometry'}
             </p>
@@ -1751,7 +1940,7 @@ function StencilStudioPanel({
           {stencilError ? <p className="mt-3 text-sm text-red-600">{stencilError}</p> : null}
         </div>
 
-        {stencilSettings.mode === 'multi' && stencilLayers.length > 0 ? (
+        {stencilSettings.mode !== 'single' && stencilLayers.length > 0 ? (
           <div className="mt-4 rounded-xl border border-[#e8e0d8] bg-white p-4">
             <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
               Generated Layers
@@ -1759,10 +1948,8 @@ function StencilStudioPanel({
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {stencilLayers.map((layer) => (
                 <div key={`stencil-layer-${layer.index}`} className="rounded-lg border border-[#eee5db] p-3">
-                  <p className="text-sm font-medium text-[#5c4a3d]">Layer {layer.index + 1}</p>
-                  <p className="mb-2 text-xs text-[#8b7b6b]">
-                    Tone {layer.cutoffLow}-{layer.cutoffHigh}
-                  </p>
+                  <p className="text-sm font-medium text-[#5c4a3d]">{layer.name || `Layer ${layer.index + 1}`}</p>
+                  <p className="mb-2 text-xs text-[#8b7b6b]">{layer.hint || `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`}</p>
                   <img
                     src={layer.previewUrl}
                     alt={`Stencil layer ${layer.index + 1}`}
@@ -2463,10 +2650,24 @@ function App() {
       setStencilError('')
       setStencilLayers([])
       const image = await loadImageFromFile(stencilImageFile)
-      if (stencilSettings.mode === 'multi') {
+      if (stencilSettings.mode === 'pattern') {
+        const pairLayers = createTwoLayerPatternMasks(image, stencilSettings)
+        const layerSvgs = pairLayers.map((layer) => ({
+          index: layer.index,
+          name: layer.name,
+          hint: layer.hint,
+          previewUrl: layer.previewUrl,
+          svg: buildStencilSvg(layer.imageData, { ...stencilSettings, noiseFilter: 1 }),
+        }))
+        setStencilProcessedPreviewUrl(layerSvgs[0]?.previewUrl || '')
+        setStencilSvg(layerSvgs[0]?.svg || '')
+        setStencilLayers(layerSvgs)
+      } else if (stencilSettings.mode === 'multi') {
         const posterizedLayers = createPosterizedStencilLayers(image, stencilSettings)
         const layerSvgs = posterizedLayers.map((layer) => ({
           index: layer.index,
+          name: `Layer ${layer.index + 1}`,
+          hint: `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`,
           cutoffLow: layer.cutoffLow,
           cutoffHigh: layer.cutoffHigh,
           previewUrl: layer.previewUrl,
@@ -2508,7 +2709,11 @@ function App() {
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = `stencil-layer-${layerIndex + 1}-${new Date().toISOString().slice(0, 10)}.svg`
+    const label = String(layer.name || `layer-${layerIndex + 1}`)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+    anchor.download = `stencil-${label || `layer-${layerIndex + 1}`}-${new Date().toISOString().slice(0, 10)}.svg`
     document.body.appendChild(anchor)
     anchor.click()
     document.body.removeChild(anchor)
