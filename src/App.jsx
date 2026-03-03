@@ -2976,20 +2976,21 @@ function App() {
                                     </button>
 
                                     {isFamilyOpen ? (
-                                      <div className="space-y-2 border-t border-[#eee5db] p-3">
+                                      <div className="border-t border-[#eee5db] p-3">
                                         {familyItems.length === 0 ? (
                                           <p className="text-xs text-[#8b7b6b]">No colors in this collection yet.</p>
                                         ) : (
-                                          familyItems
-                                            .slice()
-                                            .sort(sortSuppliesByVisualColor)
-                                            .map((item) => (
+                                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                            {familyItems
+                                              .slice()
+                                              .sort(sortSuppliesByVisualColor)
+                                              .map((item) => (
                                               <div
                                                 key={item.id}
-                                                className="flex items-center gap-3 rounded-lg border border-[#ebe2d8] bg-white px-3 py-2"
+                                                className="flex items-start gap-3 rounded-lg border border-[#ebe2d8] bg-white px-3 py-2.5"
                                               >
                                                 <div
-                                                  className="h-6 w-6 rounded-md border-2 border-white shadow-sm ring-1 ring-black/10"
+                                                  className="h-7 w-7 rounded-md border-2 border-white shadow-sm ring-1 ring-black/10"
                                                   style={{ backgroundColor: normalizeHex(item.hex) || '#000000' }}
                                                 />
                                                 <div className="min-w-0 flex-1">
@@ -3007,7 +3008,8 @@ function App() {
                                                   Edit
                                                 </button>
                                               </div>
-                                            ))
+                                            ))}
+                                          </div>
                                         )}
                                       </div>
                                     ) : null}
