@@ -1945,7 +1945,7 @@ function StencilStudioPanel({
               type="button"
               onClick={onGenerate}
               disabled={!stencilImageFile || stencilBusy}
-              className="rounded-lg bg-[#a58bc4] px-4 py-2 text-sm font-medium text-[#3f3254] hover:bg-[#9678b8] disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-lg border border-[#8e72b5] bg-gradient-to-r from-[#b39ad6] to-[#9f84c5] px-4 py-2 text-sm font-semibold text-[#302442] shadow-sm hover:from-[#a88fd0] hover:to-[#9577bd] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {stencilBusy ? 'Vectorizing...' : 'Generate Stencil'}
             </button>
@@ -1953,7 +1953,7 @@ function StencilStudioPanel({
               type="button"
               onClick={onDownloadSvg}
               disabled={!stencilSvg}
-              className="rounded-lg border border-[#d7c7ee] bg-[#f4eefc] px-4 py-2 text-sm font-medium text-[#5e4a7f] hover:bg-[#ece2fa] disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-lg border border-[#b7a3d6] bg-white px-4 py-2 text-sm font-semibold text-[#503d6f] shadow-sm hover:bg-[#f8f3ff] disabled:cursor-not-allowed disabled:opacity-60"
             >
               Download SVG
             </button>
@@ -1961,7 +1961,7 @@ function StencilStudioPanel({
               type="button"
               onClick={onSaveToLibrary}
               disabled={!stencilSvg && stencilLayers.length === 0}
-              className="rounded-lg border border-[#c4b4df] bg-white px-4 py-2 text-sm font-medium text-[#5a4a74] hover:bg-[#f8f3ff] disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-lg border border-[#b7a3d6] bg-white px-4 py-2 text-sm font-semibold text-[#503d6f] shadow-sm hover:bg-[#f8f3ff] disabled:cursor-not-allowed disabled:opacity-60"
             >
               Save to Library
             </button>
