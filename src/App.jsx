@@ -671,64 +671,101 @@ function getSvgViewBoxSize(svgElement) {
   return { width: 512, height: 512 }
 }
 
-function wrapSvgAsFiveBySevenPattern(svgString, { tileScale = 1 } = {}) {
+function getStencilCanvasSize(paperSize = '5x7', orientation = 'portrait') {
+  const [a, b] = String(paperSize || '5x7')
+    .split('x')
+    .map((value) => Number.parseFloat(value))
+  const baseWidth = Number.isFinite(a) && a > 0 ? a : 5
+  const baseHeight = Number.isFinite(b) && b > 0 ? b : 7
+  const portrait = String(orientation || 'portrait') !== 'landscape'
+  const widthIn = portrait ? Math.min(baseWidth, baseHeight) : Math.max(baseWidth, baseHeight)
+  const heightIn = portrait ? Math.max(baseWidth, baseHeight) : Math.min(baseWidth, baseHeight)
+  return {
+    widthIn,
+    heightIn,
+    widthPx: widthIn * 96,
+    heightPx: heightIn * 96,
+  }
+}
+
+function buildStyledPathNode(outputDoc, sourcePath) {
+  const node = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'path')
+  node.setAttribute('d', sourcePath.getAttribute('d') || '')
+  node.setAttribute('fill', '#111111')
+  const stroke = sourcePath.getAttribute('stroke')
+  const strokeWidth = sourcePath.getAttribute('stroke-width')
+  if (stroke && stroke !== 'none') node.setAttribute('stroke', '#111111')
+  if (strokeWidth) node.setAttribute('stroke-width', strokeWidth)
+  const lineJoin = sourcePath.getAttribute('stroke-linejoin')
+  const lineCap = sourcePath.getAttribute('stroke-linecap')
+  if (lineJoin) node.setAttribute('stroke-linejoin', lineJoin)
+  if (lineCap) node.setAttribute('stroke-linecap', lineCap)
+  return node
+}
+
+function wrapSvgForStencilCanvas(
+  svgString,
+  { paperSize = '5x7', orientation = 'portrait', mode = 'multi', tileScale = 1 } = {},
+) {
   const parser = new DOMParser()
   const parsed = parser.parseFromString(svgString, 'image/svg+xml')
   const sourceSvg = parsed.querySelector('svg')
   if (!sourceSvg) return svgString
 
   const { width: srcWidth, height: srcHeight } = getSvgViewBoxSize(sourceSvg)
-  const exportWidth = 5 * 96
-  const exportHeight = 7 * 96
+  const { widthIn, heightIn, widthPx: exportWidth, heightPx: exportHeight } = getStencilCanvasSize(
+    paperSize,
+    orientation,
+  )
   const scale = Math.max(0.2, Math.min(3, Number(tileScale) || 1))
-  const tileWidth = Math.max(8, srcWidth * scale)
-  const tileHeight = Math.max(8, srcHeight * scale)
 
   const outputDoc = document.implementation.createDocument('http://www.w3.org/2000/svg', 'svg', null)
   const outputSvg = outputDoc.documentElement
   outputSvg.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
-  outputSvg.setAttribute('width', '5in')
-  outputSvg.setAttribute('height', '7in')
+  outputSvg.setAttribute('width', `${widthIn}in`)
+  outputSvg.setAttribute('height', `${heightIn}in`)
   outputSvg.setAttribute('viewBox', `0 0 ${exportWidth} ${exportHeight}`)
   outputSvg.setAttribute('preserveAspectRatio', 'xMidYMid meet')
 
-  const defs = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'defs')
-  const pattern = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'pattern')
-  pattern.setAttribute('id', 'tile')
-  pattern.setAttribute('patternUnits', 'userSpaceOnUse')
-  pattern.setAttribute('width', String(tileWidth))
-  pattern.setAttribute('height', String(tileHeight))
+  const sourcePaths = sourceSvg.querySelectorAll('path')
+  if (mode === 'pattern') {
+    const tileWidth = Math.max(8, srcWidth * scale)
+    const tileHeight = Math.max(8, srcHeight * scale)
+    const defs = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'defs')
+    const pattern = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'pattern')
+    pattern.setAttribute('id', 'tile')
+    pattern.setAttribute('patternUnits', 'userSpaceOnUse')
+    pattern.setAttribute('width', String(tileWidth))
+    pattern.setAttribute('height', String(tileHeight))
 
-  const tileGroup = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'g')
-  tileGroup.setAttribute('transform', `scale(${scale})`)
+    const tileGroup = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'g')
+    tileGroup.setAttribute('transform', `scale(${scale})`)
+    sourcePaths.forEach((sourcePath) => {
+      tileGroup.appendChild(buildStyledPathNode(outputDoc, sourcePath))
+    })
 
-  const paths = sourceSvg.querySelectorAll('path')
-  paths.forEach((sourcePath) => {
-    const node = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'path')
-    node.setAttribute('d', sourcePath.getAttribute('d') || '')
-    node.setAttribute('fill', '#111111')
-    const stroke = sourcePath.getAttribute('stroke')
-    const strokeWidth = sourcePath.getAttribute('stroke-width')
-    if (stroke && stroke !== 'none') node.setAttribute('stroke', '#111111')
-    if (strokeWidth) node.setAttribute('stroke-width', strokeWidth)
-    const lineJoin = sourcePath.getAttribute('stroke-linejoin')
-    const lineCap = sourcePath.getAttribute('stroke-linecap')
-    if (lineJoin) node.setAttribute('stroke-linejoin', lineJoin)
-    if (lineCap) node.setAttribute('stroke-linecap', lineCap)
-    tileGroup.appendChild(node)
-  })
+    pattern.appendChild(tileGroup)
+    defs.appendChild(pattern)
+    outputSvg.appendChild(defs)
 
-  pattern.appendChild(tileGroup)
-  defs.appendChild(pattern)
-  outputSvg.appendChild(defs)
-
-  const rect = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'rect')
-  rect.setAttribute('x', '0')
-  rect.setAttribute('y', '0')
-  rect.setAttribute('width', String(exportWidth))
-  rect.setAttribute('height', String(exportHeight))
-  rect.setAttribute('fill', 'url(#tile)')
-  outputSvg.appendChild(rect)
+    const rect = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'rect')
+    rect.setAttribute('x', '0')
+    rect.setAttribute('y', '0')
+    rect.setAttribute('width', String(exportWidth))
+    rect.setAttribute('height', String(exportHeight))
+    rect.setAttribute('fill', 'url(#tile)')
+    outputSvg.appendChild(rect)
+  } else {
+    const fitScale = Math.min((exportWidth * 0.92) / srcWidth, (exportHeight * 0.92) / srcHeight)
+    const tx = (exportWidth - srcWidth * fitScale) / 2
+    const ty = (exportHeight - srcHeight * fitScale) / 2
+    const group = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'g')
+    group.setAttribute('transform', `translate(${tx} ${ty}) scale(${fitScale})`)
+    sourcePaths.forEach((sourcePath) => {
+      group.appendChild(buildStyledPathNode(outputDoc, sourcePath))
+    })
+    outputSvg.appendChild(group)
+  }
 
   return new XMLSerializer().serializeToString(outputSvg)
 }
@@ -1948,28 +1985,28 @@ function StencilStudioPanel({
                 <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                   Output Mode
                 </label>
-                <div className="inline-flex flex-wrap rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-1">
+                <div className="inline-flex flex-wrap rounded-lg border-2 border-[#cab6ea] bg-[#efe6fb] p-1 shadow-sm">
                   <button
                     type="button"
                     onClick={() => onUpdateSetting('mode', 'multi')}
-                    className={`rounded-md px-3 py-1 text-xs font-medium ${
+                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
                       stencilSettings.mode === 'multi'
-                        ? 'bg-[#a58bc4] text-[#3f3254]'
-                        : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                        ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
+                        : 'text-[#5f5276] hover:bg-white'
                     }`}
                   >
-                    Layered Image Stencils
+                    Layered Image
                   </button>
                   <button
                     type="button"
                     onClick={() => onUpdateSetting('mode', 'pattern')}
-                    className={`rounded-md px-3 py-1 text-xs font-medium ${
+                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
                       stencilSettings.mode === 'pattern'
-                        ? 'bg-[#a58bc4] text-[#3f3254]'
-                        : 'text-[#6b5b4f] hover:bg-white'
+                        ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
+                        : 'text-[#5f5276] hover:bg-white'
                     }`}
                   >
-                    Repeat Pattern Stencils
+                    Repeat Pattern
                   </button>
                 </div>
               </div>
