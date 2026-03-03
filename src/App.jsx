@@ -603,7 +603,9 @@ function getColorSortMeta(hex) {
   }
 
   const isNeutral = saturation < 0.14
-  return { hue, saturation, lightness, isNeutral }
+  const lab = hexToLab(normalized)
+  const perceptualLightness = Array.isArray(lab) && Number.isFinite(lab[0]) ? lab[0] / 100 : lightness
+  return { hue, saturation, lightness, perceptualLightness, isNeutral }
 }
 
 function sortSuppliesByVisualColor(a, b) {
@@ -617,12 +619,16 @@ function sortSuppliesByVisualColor(a, b) {
   if (aMeta.isNeutral !== bMeta.isNeutral) return aMeta.isNeutral ? 1 : -1
 
   if (aMeta.isNeutral && bMeta.isNeutral) {
-    if (aMeta.lightness !== bMeta.lightness) return bMeta.lightness - aMeta.lightness
+    if (aMeta.perceptualLightness !== bMeta.perceptualLightness) {
+      return bMeta.perceptualLightness - aMeta.perceptualLightness
+    }
     return String(a?.name || '').localeCompare(String(b?.name || ''))
   }
 
-  // For non-neutrals, sort by value ramp first so collections read like a gradient.
-  if (aMeta.lightness !== bMeta.lightness) return bMeta.lightness - aMeta.lightness
+  // For non-neutrals, use Lab lightness for a more perceptual gradient.
+  if (aMeta.perceptualLightness !== bMeta.perceptualLightness) {
+    return bMeta.perceptualLightness - aMeta.perceptualLightness
+  }
   if (aMeta.hue !== bMeta.hue) return aMeta.hue - bMeta.hue
   if (aMeta.saturation !== bMeta.saturation) return bMeta.saturation - aMeta.saturation
   return String(a?.name || '').localeCompare(String(b?.name || ''))
@@ -1544,10 +1550,6 @@ function App() {
       const prompt = await probeCloudDataForUser(session.user.id)
       setCloudDataPrompt(prompt)
       setAutoCloudSyncArmed(!prompt?.hasData)
-      if (prompt?.hasData) {
-        setCloudSyncModalOpen(true)
-        setAuthMessage('Cloud data found. Load it?')
-      }
     })
 
     return () => {
@@ -2663,12 +2665,25 @@ function App() {
     }
   }
 
+  async function openCloudSyncModal() {
+    setCloudSyncModalOpen(true)
+    if (!supabaseConfigured || !supabase || !authUserEmail) return
+    try {
+      const user = await getAuthenticatedUser()
+      const prompt = await probeCloudDataForUser(user.id)
+      setCloudDataPrompt(prompt)
+      setAutoCloudSyncArmed(!prompt?.hasData)
+    } catch {
+      // Keep modal open; existing auth status messaging handles sign-in issues when actions run.
+    }
+  }
+
   return (
     <div className="font-body flex min-h-screen flex-col overflow-auto bg-[#faf7f4] text-[#3d3530]">
       <HeaderBar
         isDataMenuOpen={dataMenuOpen}
         onToggleDataMenu={() => setDataMenuOpen((open) => !open)}
-        onOpenCloudSync={() => setCloudSyncModalOpen(true)}
+        onOpenCloudSync={() => void openCloudSyncModal()}
         cloudSignedIn={Boolean(authUserEmail)}
         onOpenManageSupplies={() => {
           setDataMenuOpen(false)
@@ -2902,13 +2917,11 @@ function App() {
                       <div key={brand} className="rounded-xl border border-[#e8e0d8] bg-white">
                         <button
                           onClick={() => toggleBrandExpanded(brand)}
-                          className="flex w-full items-center justify-between rounded-t-xl p-4 text-left hover:bg-[#faf7f4]"
+                          className="flex w-full items-center justify-between rounded-t-xl border-b border-[#e6daf7] bg-[#f4eefc] p-4 text-left hover:bg-[#ede3fb]"
                         >
-                          <div>
-                            <p className="inline-flex rounded-full border border-[#d7c7ee] bg-[#f4eefc] px-3 py-1 text-sm font-semibold text-[#5e4a7f]">
-                              {brand}
-                            </p>
-                            <p className="mt-1 text-xs text-[#8b7b6b]">
+                          <div className="min-w-0 flex-1 pr-3">
+                            <p className="font-display truncate text-2xl leading-none text-[#5e4a7f]">{brand}</p>
+                            <p className="mt-2 text-xs text-[#8b7b6b]">
                               {brandFamilies.length} collections • {brandItems.length} {manageTab}
                             </p>
                           </div>
