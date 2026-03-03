@@ -2255,6 +2255,22 @@ function StencilStudioPanel({
               </div>
 
               <div>
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                  <span>Straighten Adjust ({Number(stencilSettings.straightenAdjust || 0).toFixed(1)}°)</span>
+                  <HelpTip text="Manual rotation tweak on top of auto-straighten. Use this when repeats still look slanted." />
+                </div>
+                <input
+                  type="range"
+                  min={-15}
+                  max={15}
+                  step={0.5}
+                  value={Number(stencilSettings.straightenAdjust || 0)}
+                  onChange={(e) => onUpdateSetting('straightenAdjust', Number(e.target.value))}
+                  className="w-full accent-[#9678b8]"
+                />
+              </div>
+
+              <div>
                 <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                   Output Mode
                 </label>
@@ -2858,6 +2874,7 @@ function App() {
     tileScale: 100,
     repeatStyle: 'seamless',
     autoStraighten: true,
+    straightenAdjust: 0,
     invert: false,
   })
 
@@ -3348,7 +3365,8 @@ function App() {
       setStencilError('')
       setStencilLayers([])
       const image = await loadImageFromFile(stencilImageFile)
-      const rotationDeg = stencilSettings.autoStraighten ? -estimateDominantGridAngle(image) : 0
+      const autoRotationDeg = stencilSettings.autoStraighten ? -estimateDominantGridAngle(image) : 0
+      const rotationDeg = autoRotationDeg + Number(stencilSettings.straightenAdjust || 0)
       setStencilStraightenAngle(rotationDeg)
       if (stencilSettings.mode === 'pattern') {
         const pairLayers = createTwoLayerPatternMasks(image, { ...stencilSettings, rotationDeg })
