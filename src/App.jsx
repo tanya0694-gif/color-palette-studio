@@ -621,8 +621,9 @@ function sortSuppliesByVisualColor(a, b) {
     return String(a?.name || '').localeCompare(String(b?.name || ''))
   }
 
+  // For non-neutrals, sort by value ramp first so collections read like a gradient.
+  if (aMeta.lightness !== bMeta.lightness) return bMeta.lightness - aMeta.lightness
   if (aMeta.hue !== bMeta.hue) return aMeta.hue - bMeta.hue
-  if (aMeta.lightness !== bMeta.lightness) return aMeta.lightness - bMeta.lightness
   if (aMeta.saturation !== bMeta.saturation) return bMeta.saturation - aMeta.saturation
   return String(a?.name || '').localeCompare(String(b?.name || ''))
 }
