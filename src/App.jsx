@@ -620,8 +620,8 @@ function createTwoLayerPatternMasks(img, { detail = 6, invert = false, rotationD
   const fillSatThreshold = Math.max(32, percentile(satValues, 0.45))
   const fillVeryLowSat = Math.max(14, percentile(satValues, 0.2))
   const passes = detail >= 7 ? 1 : 2
-  const supportMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
-  const supportExpandPasses = detail >= 8 ? 4 : 5
+  const contentMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
+  const fillSeedMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
 
   for (let i = 0; i < source.data.length; i += 4) {
     const r = source.data[i]
@@ -632,17 +632,22 @@ function createTwoLayerPatternMasks(img, { detail = 6, invert = false, rotationD
     const min = Math.min(r, g, b)
     const light = (max + min) / 2
     const sat = max === 0 ? 0 : ((max - min) / max) * 255
-    const inSupport =
-      a >= 15 &&
-      (sat >= fillSatThreshold ||
-        (sat >= fillVeryLowSat + 8 && light <= brightThreshold - 10))
-    const value = inSupport ? 0 : 255
-    supportMask.data[i] = value
-    supportMask.data[i + 1] = value
-    supportMask.data[i + 2] = value
-    supportMask.data[i + 3] = 255
+    const inContent = a >= 15 && (sat >= fillVeryLowSat + 4 || light <= brightThreshold - 16)
+    const seedFill = a >= 15 && sat >= fillSatThreshold
+    const contentValue = inContent ? 0 : 255
+    const seedValue = seedFill ? 0 : 255
+    contentMask.data[i] = contentValue
+    contentMask.data[i + 1] = contentValue
+    contentMask.data[i + 2] = contentValue
+    contentMask.data[i + 3] = 255
+    fillSeedMask.data[i] = seedValue
+    fillSeedMask.data[i + 1] = seedValue
+    fillSeedMask.data[i + 2] = seedValue
+    fillSeedMask.data[i + 3] = 255
   }
-  dilateBinaryMask(supportMask, supportExpandPasses)
+  dilateBinaryMask(contentMask, 4)
+  const fillNeighborhoodMask = new ImageData(new Uint8ClampedArray(fillSeedMask.data), width, height)
+  dilateBinaryMask(fillNeighborhoodMask, 3)
 
   const outlineMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
   const fillMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
@@ -671,9 +676,15 @@ function createTwoLayerPatternMasks(img, { detail = 6, invert = false, rotationD
     const light = (max + min) / 2
     const sat = max === 0 ? 0 : ((max - min) / max) * 255
 
-    const inSupport = supportMask.data[i] < 128
-    const isLikelyOutline = inSupport && light >= brightThreshold && sat <= lowSatThreshold * 1.15
+    const inContent = contentMask.data[i] < 128
+    const nearFill = fillNeighborhoodMask.data[i] < 128
     const isLikelyFill = sat >= fillSatThreshold && !(light >= brightThreshold && sat <= fillVeryLowSat)
+    const isLikelyOutline =
+      inContent &&
+      nearFill &&
+      !isLikelyFill &&
+      light >= brightThreshold &&
+      sat <= lowSatThreshold * 1.2
 
     let outlineValue = isLikelyOutline ? 0 : 255
     let fillValue = isLikelyFill ? 0 : 255
@@ -696,10 +707,10 @@ function createTwoLayerPatternMasks(img, { detail = 6, invert = false, rotationD
 
   smoothBinaryMask(outlineMask, passes)
   smoothBinaryMask(fillMask, passes)
-  // If outline became too sparse, relax one step by borrowing support edges.
+  // If outline became too sparse, relax one step by borrowing localized content edges.
   if (outlinePixelCount < width * height * 0.002) {
     for (let i = 0; i < outlineMask.data.length; i += 4) {
-      const softened = supportMask.data[i] < 128 ? 0 : 255
+      const softened = contentMask.data[i] < 128 && fillNeighborhoodMask.data[i] < 128 ? 0 : 255
       outlineMask.data[i] = softened
       outlineMask.data[i + 1] = softened
       outlineMask.data[i + 2] = softened
@@ -3355,7 +3366,7 @@ function App() {
             name: layer.name,
             hint: layer.hint,
             previewUrl: layer.previewUrl,
-            colorHex: layer.index === 0 ? '#C76E9A' : '#EFEFEF',
+            colorHex: layer.index === 0 ? '#C76E9A' : '#8D8D8D',
             svg,
           }
         })
