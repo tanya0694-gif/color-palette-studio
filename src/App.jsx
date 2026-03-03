@@ -1426,6 +1426,7 @@ function App() {
   const [supplyEditOpen, setSupplyEditOpen] = useState(false)
   const [renameBrandOpen, setRenameBrandOpen] = useState(false)
   const [missingSuppliesOpen, setMissingSuppliesOpen] = useState(false)
+  const [missingExpandedBrands, setMissingExpandedBrands] = useState({})
   const [missingExpandedFamilies, setMissingExpandedFamilies] = useState({})
   const [referenceImportOpen, setReferenceImportOpen] = useState(false)
   const [authEmailInput, setAuthEmailInput] = useState('')
@@ -1514,6 +1515,7 @@ function App() {
     if (!manageSuppliesOpen) {
       setBrandFeedback('')
       setMissingSuppliesOpen(false)
+      setMissingExpandedBrands({})
       setMissingExpandedFamilies({})
       setReferenceImportOpen(false)
       setReferenceImportError('')
@@ -2232,9 +2234,6 @@ function App() {
   const markerTypeOptions = ['Acrylic', 'Alcohol']
   const missingSuppliesReport = useMemo(() => {
     const masterItems = Array.isArray(masterLists?.[manageTab]) ? masterLists[manageTab] : []
-    if (!masterItems.length) {
-      return { brands: [], totalMissing: 0, totalExpected: 0 }
-    }
 
     const byBrandReference = masterItems.reduce((acc, item) => {
       const brand = String(item.brand || 'Unknown Brand').trim()
@@ -2243,11 +2242,30 @@ function App() {
       return acc
     }, {})
 
-    const brands = Object.entries(byBrandReference)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([brand, referenceItems]) => {
+    const ownedBrands = [...new Set(manageItems.map((item) => String(item.brand || '').trim()).filter(Boolean))]
+    const allBrands = [...new Set([...Object.keys(byBrandReference), ...ownedBrands])].sort((a, b) =>
+      a.localeCompare(b),
+    )
+
+    if (!allBrands.length) {
+      return { brands: [], totalMissing: 0, totalExpected: 0 }
+    }
+
+    const brands = allBrands.map((brand) => {
+        const referenceItems = byBrandReference[brand] || []
         const brandKey = String(brand).toLowerCase()
         const ownedForBrand = manageItems.filter((existing) => String(existing.brand || '').toLowerCase() === brandKey)
+
+        if (referenceItems.length === 0) {
+          return {
+            brand,
+            total: 0,
+            ownedCount: ownedForBrand.length,
+            missingCount: 0,
+            needsReference: true,
+            families: [],
+          }
+        }
 
         const missingItems = referenceItems.filter((item) => {
           const targetHex = normalizeHex(item.hex)
@@ -2274,6 +2292,7 @@ function App() {
           total,
           ownedCount,
           missingCount,
+          needsReference: false,
           families: Object.entries(missingByFamily)
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([family, items]) => ({ family, items })),
@@ -2282,7 +2301,7 @@ function App() {
 
     return {
       brands,
-      totalMissing: brands.reduce((sum, brand) => sum + brand.missingCount, 0),
+      totalMissing: brands.reduce((sum, brand) => sum + (brand.needsReference ? 0 : brand.missingCount), 0),
       totalExpected: masterItems.length,
     }
   }, [manageItems, manageTab, masterLists])
@@ -2971,31 +2990,20 @@ function App() {
                 </div>
               </div>
 
-              <div className={`grid grid-cols-1 gap-2 ${visibleBrands.length === 0 ? 'md:grid-cols-2' : ''}`}>
-                {visibleBrands.length === 0 ? (
-                  <button
-                    onClick={() => openAddSupply(manageTab)}
-                    className="w-full rounded-xl bg-[#a58bc4] px-4 py-3 text-sm font-medium text-[#3f3254] hover:bg-[#9678b8]"
-                  >
-                    {manageTab === 'inks'
-                      ? '+ Add Ink'
-                      : manageTab === 'cardstock'
-                        ? '+ Add Cardstock'
-                        : manageTab === 'paints'
-                          ? '+ Add Paint'
-                          : '+ Add Marker'}
-                  </button>
-                ) : null}
+              {visibleBrands.length === 0 ? (
                 <button
-                  onClick={() => {
-                    setBrandFeedback('')
-                    setNewBrandOpen(true)
-                  }}
-                  className="w-full rounded-xl border border-[#d9cfc4] bg-white px-4 py-3 text-sm font-medium text-[#6b5b4f] hover:bg-[#f5ede6]"
+                  onClick={() => openAddSupply(manageTab)}
+                  className="w-full rounded-xl bg-[#a58bc4] px-4 py-3 text-sm font-medium text-[#3f3254] hover:bg-[#9678b8]"
                 >
-                  + Add New Brand
+                  {manageTab === 'inks'
+                    ? '+ Add Ink'
+                    : manageTab === 'cardstock'
+                      ? '+ Add Cardstock'
+                      : manageTab === 'paints'
+                        ? '+ Add Paint'
+                        : '+ Add Marker'}
                 </button>
-              </div>
+              ) : null}
 
               {brandFeedback ? (
                 <div className="rounded-lg bg-[#e8dff5] px-3 py-2 text-sm text-[#5c4a3d]">
@@ -3761,13 +3769,9 @@ function App() {
                 ? `Looks like you're still missing ${missingSuppliesReport.totalMissing} of ${missingSuppliesReport.totalExpected} reference-catalog colors.`
                 : `Amazing! You have it all. (${missingSuppliesReport.totalExpected}/${missingSuppliesReport.totalExpected})`}
             </div>
-            {missingSuppliesReport.totalExpected === 0 ? (
+            {missingSuppliesReport.brands.length === 0 ? (
               <div className="rounded-lg border border-dashed border-[#d9cfc4] p-4 text-sm text-[#8b7b6b]">
                 No reference catalog saved for this tab yet. Use "Import Reference Text" or "Save Current as Reference" first.
-              </div>
-            ) : missingSuppliesReport.totalMissing === 0 ? (
-              <div className="rounded-lg border border-[#cfe8d2] bg-[#e9f8ec] p-4 text-sm text-[#386244]">
-                Amazing! You have it all.
               </div>
             ) : (
               <>
@@ -3778,12 +3782,16 @@ function App() {
                       <span
                         key={`missing-summary-${brandGroup.brand}`}
                         className={`rounded-full border px-2.5 py-1 text-xs ${
-                          brandGroup.missingCount > 0
+                          brandGroup.needsReference
+                            ? 'border-amber-200 bg-amber-50 text-amber-800'
+                            : brandGroup.missingCount > 0
                             ? 'border-[#d7c7ee] bg-[#f4eefc] text-[#5e4a7f]'
                             : 'border-[#cfe8d2] bg-[#e9f8ec] text-[#386244]'
                         }`}
                       >
-                        {brandGroup.missingCount > 0
+                        {brandGroup.needsReference
+                          ? `${brandGroup.brand}: no reference catalog yet`
+                          : brandGroup.missingCount > 0
                           ? `${brandGroup.brand}: missing ${brandGroup.missingCount} / ${brandGroup.total}`
                           : `${brandGroup.brand}: ${brandGroup.total} / ${brandGroup.total} complete`}
                       </span>
@@ -3792,21 +3800,47 @@ function App() {
                 </div>
                 {missingSuppliesReport.brands.map((brandGroup) => (
                   <div key={brandGroup.brand} className="rounded-xl border border-[#e8e0d8] bg-white">
-                    <div className="border-b border-[#eee5db] px-4 py-3">
-                      <p className="text-sm font-semibold text-[#5c4a3d]">{brandGroup.brand}</p>
-                      <p className="text-xs text-[#8b7b6b]">
-                        {brandGroup.missingCount > 0
-                          ? `Missing ${brandGroup.missingCount} out of ${brandGroup.total}. You have ${brandGroup.ownedCount} out of ${brandGroup.total}.`
-                          : `You have ${brandGroup.ownedCount} out of ${brandGroup.total}, yay!`}
-                      </p>
-                    </div>
-                  <div className="space-y-3 px-4 py-3">
-                    {brandGroup.missingCount === 0 ? (
-                      <div className="rounded-lg border border-[#cfe8d2] bg-[#e9f8ec] px-3 py-2 text-sm text-[#386244]">
-                        Amazing! You have it all for this brand.
-                      </div>
-                    ) : (
-                      brandGroup.families.map(({ family, items }) => (
+                    {(() => {
+                      const brandKey = `${manageTab}::${brandGroup.brand}`
+                      const isExpanded =
+                        missingExpandedBrands[brandKey] ??
+                        Boolean(brandGroup.needsReference || brandGroup.missingCount > 0)
+                      return (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setMissingExpandedBrands((prev) => ({
+                                ...prev,
+                                [brandKey]: !isExpanded,
+                              }))
+                            }
+                            className="flex w-full items-center justify-between border-b border-[#eee5db] px-4 py-3 text-left hover:bg-[#f9f5fd]"
+                          >
+                            <div>
+                              <p className="text-sm font-semibold text-[#5c4a3d]">{brandGroup.brand}</p>
+                              <p className="text-xs text-[#8b7b6b]">
+                                {brandGroup.needsReference
+                                  ? `No reference catalog yet for this brand. You currently have ${brandGroup.ownedCount} items.`
+                                  : brandGroup.missingCount > 0
+                                    ? `Missing ${brandGroup.missingCount} out of ${brandGroup.total}. You have ${brandGroup.ownedCount} out of ${brandGroup.total}.`
+                                    : `You have ${brandGroup.ownedCount} out of ${brandGroup.total}, yay!`}
+                              </p>
+                            </div>
+                            <span className="text-xs text-[#8b7b6b]">{isExpanded ? 'Hide' : 'Show'}</span>
+                          </button>
+                          {isExpanded ? (
+                            <div className="space-y-3 px-4 py-3">
+                              {brandGroup.needsReference ? (
+                                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                                  Import this brand into Reference Catalog to track missing colors.
+                                </div>
+                              ) : brandGroup.missingCount === 0 ? (
+                                <div className="rounded-lg border border-[#cfe8d2] bg-[#e9f8ec] px-3 py-2 text-sm text-[#386244]">
+                                  Amazing! You have it all for this brand.
+                                </div>
+                              ) : (
+                                brandGroup.families.map(({ family, items }) => (
                       (() => {
                         const familyKey = `${manageTab}::${brandGroup.brand}::${family}`
                         const isExpanded = Boolean(missingExpandedFamilies[familyKey])
@@ -3849,8 +3883,13 @@ function App() {
                           </div>
                         )
                       })()
-                    )))}
-                  </div>
+                                ))
+                              )}
+                            </div>
+                          ) : null}
+                        </>
+                      )
+                    })()}
                 </div>
                 ))}
               </>
