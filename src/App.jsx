@@ -6,6 +6,7 @@ const STORAGE_KEY = 'palette-studio-data'
 const AUTO_CLOUD_SYNC_KEY = 'palette-studio-auto-cloud-sync'
 const REFERENCE_CATALOG_KEY = 'palette-studio-reference-catalog'
 const LEGACY_MASTER_LISTS_KEY = 'palette-studio-master-lists'
+const STENCIL_LIBRARY_KEY = 'palette-studio-stencil-library'
 
 const DEFAULT_DATA = {
   palettes: [],
@@ -273,6 +274,16 @@ async function loadImageFromFile(file) {
   } finally {
     URL.revokeObjectURL(url)
   }
+}
+
+async function readFileAsDataUrl(file) {
+  if (!file) return ''
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('Could not read file as data URL.'))
+    reader.readAsDataURL(file)
+  })
 }
 
 function createStencilImageData(img, { threshold = 140, invert = false, detail = 6 } = {}) {
@@ -967,6 +978,40 @@ function loadMasterLists() {
     return normalizeMasterLists(null)
   } catch {
     return normalizeMasterLists(null)
+  }
+}
+
+function loadStencilLibrary() {
+  try {
+    const raw = localStorage.getItem(STENCIL_LIBRARY_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map((entry) => ({
+        id: String(entry?.id || uid()),
+        name: String(entry?.name || 'Saved Stencil').trim() || 'Saved Stencil',
+        mode: String(entry?.mode || 'pattern'),
+        createdAt: String(entry?.createdAt || new Date().toISOString()),
+        settings: entry?.settings && typeof entry.settings === 'object' ? entry.settings : {},
+        sourcePreviewUrl: String(entry?.sourcePreviewUrl || ''),
+        processedPreviewUrl: String(entry?.processedPreviewUrl || ''),
+        svg: String(entry?.svg || ''),
+        layers: Array.isArray(entry?.layers)
+          ? entry.layers
+              .map((layer, index) => ({
+                index: Number.isFinite(layer?.index) ? layer.index : index,
+                name: String(layer?.name || `Layer ${index + 1}`),
+                hint: String(layer?.hint || ''),
+                previewUrl: String(layer?.previewUrl || ''),
+                svg: String(layer?.svg || ''),
+              }))
+              .filter((layer) => layer.svg)
+          : [],
+      }))
+      .filter((entry) => entry.svg || entry.layers.length)
+  } catch {
+    return []
   }
 }
 
@@ -1800,6 +1845,7 @@ function StencilStudioPanel({
   stencilProcessedPreviewUrl,
   stencilSvg,
   stencilLayers,
+  stencilLibrary,
   stencilSettings,
   stencilBusy,
   stencilError,
@@ -1808,6 +1854,9 @@ function StencilStudioPanel({
   onGenerate,
   onDownloadSvg,
   onDownloadLayerSvg,
+  onSaveToLibrary,
+  onLoadFromLibrary,
+  onDeleteFromLibrary,
 }) {
   const [isDragActive, setIsDragActive] = useState(false)
 
@@ -1846,6 +1895,14 @@ function StencilStudioPanel({
               className="rounded-lg border border-[#d7c7ee] bg-[#f4eefc] px-4 py-2 text-sm font-medium text-[#5e4a7f] hover:bg-[#ece2fa] disabled:cursor-not-allowed disabled:opacity-60"
             >
               Download SVG
+            </button>
+            <button
+              type="button"
+              onClick={onSaveToLibrary}
+              disabled={!stencilSvg && stencilLayers.length === 0}
+              className="rounded-lg border border-[#c4b4df] bg-white px-4 py-2 text-sm font-medium text-[#5a4a74] hover:bg-[#f8f3ff] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Save to Library
             </button>
           </div>
         </div>
@@ -1894,17 +1951,6 @@ function StencilStudioPanel({
                 <div className="inline-flex flex-wrap rounded-lg border border-[#d9cfc4] bg-white p-1">
                   <button
                     type="button"
-                    onClick={() => onUpdateSetting('mode', 'single')}
-                    className={`rounded-md px-3 py-1 text-xs font-medium ${
-                      stencilSettings.mode === 'single'
-                        ? 'bg-[#a58bc4] text-[#3f3254]'
-                        : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
-                    }`}
-                  >
-                    Single
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => onUpdateSetting('mode', 'multi')}
                     className={`rounded-md px-3 py-1 text-xs font-medium ${
                       stencilSettings.mode === 'multi'
@@ -1912,7 +1958,7 @@ function StencilStudioPanel({
                         : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
                     }`}
                   >
-                    Multi-layer
+                    Layered Image Stencils
                   </button>
                   <button
                     type="button"
@@ -1923,7 +1969,7 @@ function StencilStudioPanel({
                         : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
                     }`}
                   >
-                    Pattern 2-layer
+                    Repeat Pattern Stencils
                   </button>
                 </div>
               </div>
@@ -1976,22 +2022,6 @@ function StencilStudioPanel({
                     </div>
                   ) : null}
                 </>
-              ) : null}
-
-              {stencilSettings.mode === 'single' ? (
-                <div>
-                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                    Threshold ({stencilSettings.threshold})
-                  </label>
-                  <input
-                    type="range"
-                    min={20}
-                    max={235}
-                    value={stencilSettings.threshold}
-                    onChange={(e) => onUpdateSetting('threshold', Number(e.target.value))}
-                    className="w-full accent-[#9678b8]"
-                  />
-                </div>
               ) : null}
 
               {stencilSettings.mode === 'multi' ? (
@@ -2124,7 +2154,7 @@ function StencilStudioPanel({
           {stencilError ? <p className="mt-3 text-sm text-red-600">{stencilError}</p> : null}
         </div>
 
-        {stencilSettings.mode !== 'single' && stencilLayers.length > 0 ? (
+        {stencilLayers.length > 0 ? (
           <div className="mt-4 rounded-xl border border-[#e8e0d8] bg-white p-4">
             <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
               Generated Layers
@@ -2146,6 +2176,51 @@ function StencilStudioPanel({
                   >
                     Download Layer SVG
                   </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {stencilLibrary.length > 0 ? (
+          <div className="mt-4 rounded-xl border border-[#e8e0d8] bg-white p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Saved Stencil Library</p>
+              <p className="text-xs text-[#9a8d80]">{stencilLibrary.length} saved</p>
+            </div>
+            <div className="space-y-2">
+              {stencilLibrary.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#eee5db] bg-[#fcfaf7] px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-[#5c4a3d]">{entry.name}</p>
+                    <p className="text-xs text-[#8b7b6b]">
+                      {entry.mode === 'pattern'
+                        ? 'Repeat Pattern Stencils'
+                        : entry.mode === 'multi'
+                          ? 'Layered Image Stencils'
+                          : 'Stencil'} •{' '}
+                      {new Date(entry.createdAt).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onLoadFromLibrary(entry.id)}
+                      className="rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
+                    >
+                      Open
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDeleteFromLibrary(entry.id)}
+                      className="rounded-md border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -2351,9 +2426,11 @@ function App() {
   const [paletteImageError, setPaletteImageError] = useState('')
   const [stencilImageFile, setStencilImageFile] = useState(null)
   const [stencilImagePreviewUrl, setStencilImagePreviewUrl] = useState('')
+  const [stencilSourceDataUrl, setStencilSourceDataUrl] = useState('')
   const [stencilProcessedPreviewUrl, setStencilProcessedPreviewUrl] = useState('')
   const [stencilSvg, setStencilSvg] = useState('')
   const [stencilLayers, setStencilLayers] = useState([])
+  const [stencilLibrary, setStencilLibrary] = useState(loadStencilLibrary)
   const [stencilBusy, setStencilBusy] = useState(false)
   const [stencilError, setStencilError] = useState('')
   const [stencilSettings, setStencilSettings] = useState({
@@ -2422,6 +2499,14 @@ function App() {
       // ignore
     }
   }, [masterLists])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STENCIL_LIBRARY_KEY, JSON.stringify(stencilLibrary))
+    } catch {
+      // ignore
+    }
+  }, [stencilLibrary])
 
   useEffect(() => {
     if (authCooldownSeconds <= 0) return
@@ -2802,9 +2887,10 @@ function App() {
     }
   }
 
-  function handleStencilImageFileChange(file) {
+  async function handleStencilImageFileChange(file) {
     setStencilError('')
     setStencilImageFile(file || null)
+    setStencilSourceDataUrl('')
     setStencilSvg('')
     setStencilLayers([])
     setStencilProcessedPreviewUrl('')
@@ -2816,6 +2902,12 @@ function App() {
       return
     }
     setStencilImagePreviewUrl(URL.createObjectURL(file))
+    try {
+      const dataUrl = await readFileAsDataUrl(file)
+      setStencilSourceDataUrl(dataUrl)
+    } catch {
+      // If data URL fails, keep working with file/object URL only.
+    }
   }
 
   function updateStencilSetting(field, value) {
@@ -2911,6 +3003,60 @@ function App() {
     anchor.click()
     document.body.removeChild(anchor)
     URL.revokeObjectURL(url)
+  }
+
+  function getStencilModeLabel(mode) {
+    if (mode === 'pattern') return 'Repeat Pattern Stencils'
+    if (mode === 'multi') return 'Layered Image Stencils'
+    return 'Stencil'
+  }
+
+  function saveStencilToLibrary() {
+    if (!stencilSvg && stencilLayers.length === 0) return
+    const defaultName = `${getStencilModeLabel(stencilSettings.mode)} ${new Date().toLocaleDateString()}`
+    const provided = window.prompt('Name this stencil set for your library:', defaultName)
+    if (provided === null) return
+    const name = String(provided || '').trim() || defaultName
+
+    const entry = {
+      id: uid(),
+      name,
+      mode: stencilSettings.mode,
+      createdAt: new Date().toISOString(),
+      settings: stencilSettings,
+      sourcePreviewUrl: stencilSourceDataUrl || '',
+      processedPreviewUrl: stencilProcessedPreviewUrl || '',
+      svg: stencilSvg || '',
+      layers: stencilLayers.map((layer, index) => ({
+        index: Number.isFinite(layer?.index) ? layer.index : index,
+        name: String(layer?.name || `Layer ${index + 1}`),
+        hint: String(layer?.hint || ''),
+        previewUrl: String(layer?.previewUrl || ''),
+        svg: String(layer?.svg || ''),
+      })),
+    }
+
+    setStencilLibrary((prev) => [entry, ...prev].slice(0, 60))
+  }
+
+  function loadStencilFromLibrary(entryId) {
+    const entry = stencilLibrary.find((item) => item.id === entryId)
+    if (!entry) return
+    if (stencilImagePreviewUrl && stencilImagePreviewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(stencilImagePreviewUrl)
+    }
+    setStencilSettings((prev) => ({ ...prev, ...entry.settings }))
+    setStencilImageFile(null)
+    setStencilSourceDataUrl(entry.sourcePreviewUrl || '')
+    setStencilImagePreviewUrl(entry.sourcePreviewUrl || '')
+    setStencilProcessedPreviewUrl(entry.processedPreviewUrl || '')
+    setStencilSvg(entry.svg || entry.layers?.[0]?.svg || '')
+    setStencilLayers(Array.isArray(entry.layers) ? entry.layers : [])
+    setStencilError('')
+  }
+
+  function deleteStencilFromLibrary(entryId) {
+    setStencilLibrary((prev) => prev.filter((item) => item.id !== entryId))
   }
 
   function savePaletteForm() {
@@ -3918,14 +4064,18 @@ function App() {
           stencilProcessedPreviewUrl={stencilProcessedPreviewUrl}
           stencilSvg={stencilSvg}
           stencilLayers={stencilLayers}
+          stencilLibrary={stencilLibrary}
           stencilSettings={stencilSettings}
           stencilBusy={stencilBusy}
           stencilError={stencilError}
-          onImageChange={handleStencilImageFileChange}
+          onImageChange={(file) => void handleStencilImageFileChange(file)}
           onUpdateSetting={updateStencilSetting}
           onGenerate={() => void generateStencilFromImage()}
           onDownloadSvg={downloadStencilSvg}
           onDownloadLayerSvg={downloadStencilLayerSvg}
+          onSaveToLibrary={saveStencilToLibrary}
+          onLoadFromLibrary={loadStencilFromLibrary}
+          onDeleteFromLibrary={deleteStencilFromLibrary}
         />
       )}
 
