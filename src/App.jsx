@@ -2011,54 +2011,80 @@ function StencilStudioPanel({
                 </div>
               </div>
 
-              {stencilSettings.mode === 'pattern' ? (
-                <>
-                  <div>
-                    <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                      Export Size
-                    </label>
-                    <div className="inline-flex rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-1">
-                      <button
-                        type="button"
-                        onClick={() => onUpdateSetting('exportSize', 'source')}
-                        className={`rounded-md px-3 py-1 text-xs font-medium ${
-                          stencilSettings.exportSize === 'source'
-                            ? 'bg-[#a58bc4] text-[#3f3254]'
-                            : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
-                        }`}
-                      >
-                        Source Size
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onUpdateSetting('exportSize', '5x7')}
-                        className={`rounded-md px-3 py-1 text-xs font-medium ${
-                          stencilSettings.exportSize === '5x7'
-                            ? 'bg-[#a58bc4] text-[#3f3254]'
-                            : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
-                        }`}
-                      >
-                        5x7 Auto Pattern
-                      </button>
-                    </div>
-                  </div>
+              <div>
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                  Export Size
+                </label>
+                <div className="inline-flex rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-1">
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSetting('paperSize', '5x7')}
+                    className={`rounded-md px-3 py-1 text-xs font-medium ${
+                      stencilSettings.paperSize === '5x7'
+                        ? 'bg-[#a58bc4] text-[#3f3254]'
+                        : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                    }`}
+                  >
+                    5x7 Size
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSetting('paperSize', '4x6')}
+                    className={`rounded-md px-3 py-1 text-xs font-medium ${
+                      stencilSettings.paperSize === '4x6'
+                        ? 'bg-[#a58bc4] text-[#3f3254]'
+                        : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                    }`}
+                  >
+                    4x6 Size
+                  </button>
+                </div>
+              </div>
 
-                  {stencilSettings.exportSize === '5x7' ? (
-                    <div>
-                      <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                        Pattern Scale ({stencilSettings.tileScale}%)
-                      </label>
-                      <input
-                        type="range"
-                        min={45}
-                        max={160}
-                        value={stencilSettings.tileScale}
-                        onChange={(e) => onUpdateSetting('tileScale', Number(e.target.value))}
-                        className="w-full accent-[#9678b8]"
-                      />
-                    </div>
-                  ) : null}
-                </>
+              <div>
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                  Orientation
+                </label>
+                <div className="inline-flex rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-1">
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSetting('orientation', 'portrait')}
+                    className={`rounded-md px-3 py-1 text-xs font-medium ${
+                      stencilSettings.orientation === 'portrait'
+                        ? 'bg-[#a58bc4] text-[#3f3254]'
+                        : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                    }`}
+                  >
+                    Portrait
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSetting('orientation', 'landscape')}
+                    className={`rounded-md px-3 py-1 text-xs font-medium ${
+                      stencilSettings.orientation === 'landscape'
+                        ? 'bg-[#a58bc4] text-[#3f3254]'
+                        : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                    }`}
+                  >
+                    Landscape
+                  </button>
+                </div>
+              </div>
+
+              {stencilSettings.mode === 'pattern' ? (
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    Pattern Scale ({stencilSettings.tileScale}%)
+                  </label>
+                  <input
+                    type="range"
+                    min={45}
+                    max={160}
+                    value={stencilSettings.tileScale}
+                    onChange={(e) => onUpdateSetting('tileScale', Number(e.target.value))}
+                    className="w-full accent-[#9678b8]"
+                  />
+                </div>
               ) : null}
 
               {stencilSettings.mode === 'multi' ? (
@@ -2471,13 +2497,14 @@ function App() {
   const [stencilBusy, setStencilBusy] = useState(false)
   const [stencilError, setStencilError] = useState('')
   const [stencilSettings, setStencilSettings] = useState({
-    mode: 'single',
+    mode: 'multi',
     threshold: 140,
     detail: 6,
     noiseFilter: 8,
     bridgeWidth: 0,
     layerCount: 3,
-    exportSize: 'source',
+    paperSize: '5x7',
+    orientation: 'portrait',
     tileScale: 100,
     invert: false,
   })
@@ -2969,10 +2996,12 @@ function App() {
         const pairLayers = createTwoLayerPatternMasks(image, stencilSettings)
         const layerSvgs = pairLayers.map((layer) => {
           const rawSvg = buildStencilSvg(layer.imageData, { ...stencilSettings, noiseFilter: 1 })
-          const svg =
-            stencilSettings.exportSize === '5x7'
-              ? wrapSvgAsFiveBySevenPattern(rawSvg, { tileScale: stencilSettings.tileScale / 100 })
-              : rawSvg
+          const svg = wrapSvgForStencilCanvas(rawSvg, {
+            paperSize: stencilSettings.paperSize,
+            orientation: stencilSettings.orientation,
+            mode: 'pattern',
+            tileScale: stencilSettings.tileScale / 100,
+          })
           return {
             index: layer.index,
             name: layer.name,
@@ -2986,21 +3015,34 @@ function App() {
         setStencilLayers(layerSvgs)
       } else if (stencilSettings.mode === 'multi') {
         const posterizedLayers = createPosterizedStencilLayers(image, stencilSettings)
-        const layerSvgs = posterizedLayers.map((layer) => ({
-          index: layer.index,
-          name: `Layer ${layer.index + 1}`,
-          hint: `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`,
-          cutoffLow: layer.cutoffLow,
-          cutoffHigh: layer.cutoffHigh,
-          previewUrl: layer.previewUrl,
-          svg: buildStencilSvg(layer.imageData, stencilSettings),
-        }))
+        const layerSvgs = posterizedLayers.map((layer) => {
+          const rawSvg = buildStencilSvg(layer.imageData, stencilSettings)
+          const svg = wrapSvgForStencilCanvas(rawSvg, {
+            paperSize: stencilSettings.paperSize,
+            orientation: stencilSettings.orientation,
+            mode: 'multi',
+          })
+          return {
+            index: layer.index,
+            name: `Layer ${layer.index + 1}`,
+            hint: `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`,
+            cutoffLow: layer.cutoffLow,
+            cutoffHigh: layer.cutoffHigh,
+            previewUrl: layer.previewUrl,
+            svg,
+          }
+        })
         setStencilProcessedPreviewUrl(layerSvgs[0]?.previewUrl || '')
         setStencilSvg(layerSvgs[0]?.svg || '')
         setStencilLayers(layerSvgs)
       } else {
         const processed = createStencilImageData(image, stencilSettings)
-        const svg = buildStencilSvg(processed.imageData, stencilSettings)
+        const rawSvg = buildStencilSvg(processed.imageData, stencilSettings)
+        const svg = wrapSvgForStencilCanvas(rawSvg, {
+          paperSize: stencilSettings.paperSize,
+          orientation: stencilSettings.orientation,
+          mode: 'multi',
+        })
         setStencilProcessedPreviewUrl(processed.rasterDataUrl)
         setStencilSvg(svg)
       }
