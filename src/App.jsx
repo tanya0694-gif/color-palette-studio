@@ -957,7 +957,7 @@ function createTwoLayerPatternMasks(
 
   const brightThreshold = Math.max(205, percentile(lightValues, 0.9) - 8)
   const lowSatThreshold = Math.max(26, percentile(satValues, 0.25))
-  const fillSatThreshold = Math.max(32, percentile(satValues, 0.45))
+  const fillSatThreshold = Math.max(34, percentile(satValues, 0.52))
   const fillVeryLowSat = Math.max(14, percentile(satValues, 0.2))
   const passes = detail >= 7 ? 1 : 2
   const contentMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
@@ -1018,7 +1018,11 @@ function createTwoLayerPatternMasks(
 
     const inContent = contentMask.data[i] < 128
     const nearFill = fillNeighborhoodMask.data[i] < 128
-    const isLikelyFill = sat >= fillSatThreshold && !(light >= brightThreshold && sat <= fillVeryLowSat)
+    const seedFill = fillSeedMask.data[i] < 128
+    const isLikelyFill =
+      outlineSource === 'fromFill'
+        ? seedFill
+        : sat >= fillSatThreshold && !(light >= brightThreshold && sat <= fillVeryLowSat)
     const isLikelyOutline =
       inContent &&
       nearFill &&
@@ -1049,8 +1053,8 @@ function createTwoLayerPatternMasks(
   smoothBinaryMask(fillMask, passes)
   if (outlineSource === 'fromFill') {
     // Remove thin linework leakage from fill so motifs (pluses/squares) stay isolated.
-    erodeBinaryMask(fillMask, 1)
-    dilateBinaryMask(fillMask, 1)
+    erodeBinaryMask(fillMask, 2)
+    dilateBinaryMask(fillMask, 2)
     for (let i = 0; i < fillMask.data.length; i += 4) {
       if (contentMask.data[i] >= 128) {
         fillMask.data[i] = 255
@@ -1092,7 +1096,9 @@ function createTwoLayerPatternMasks(
   dilateBinaryMask(fillMask, 1)
   erodeBinaryMask(fillMask, 1)
   if (outlineSource === 'fromFill') {
-    const residualAngle = estimateBinaryMaskAngle(fillMask)
+    const fillAngle = estimateBinaryMaskAngle(fillMask)
+    const outlineAngle = estimateBinaryMaskAngle(outlineMask)
+    const residualAngle = Math.abs(outlineAngle) > Math.abs(fillAngle) ? outlineAngle : fillAngle
     if (Math.abs(residualAngle) > 0.6) {
       fillMask = rotateBinaryMaskImageData(fillMask, -residualAngle)
       outlineMask = rotateBinaryMaskImageData(outlineMask, -residualAngle)
