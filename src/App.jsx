@@ -3604,6 +3604,7 @@ function StencilStudioPanel({
   const [dragCorner, setDragCorner] = useState(null)
   const [vectorPreviewMode, setVectorPreviewMode] = useState('stacked')
   const [vectorZoom, setVectorZoom] = useState(1)
+  const [showAdvancedGenerator, setShowAdvancedGenerator] = useState(false)
   const [vectorPan, setVectorPan] = useState({ x: 0, y: 0 })
   const vectorPanStateRef = useRef(null)
   const [isVectorPanning, setIsVectorPanning] = useState(false)
@@ -3626,6 +3627,10 @@ function StencilStudioPanel({
   const isLegacyGenerator = normalizedGenerator === 'legacy'
   const isAutoGenerator = normalizedGenerator === 'auto'
   const isTraceGenerator = normalizedGenerator === 'trace'
+
+  useEffect(() => {
+    if (isLegacyGenerator || isAutoGenerator) setShowAdvancedGenerator(true)
+  }, [isLegacyGenerator, isAutoGenerator])
   const exportMode = stencilSettings.exportContent || 'elements'
   const exportModeLabel =
     exportMode === 'both' ? 'Elements + Stencil Plate' : exportMode === 'plate' ? 'Stencil Plate' : 'Elements'
@@ -3844,28 +3849,6 @@ function StencilStudioPanel({
                 <div className="inline-flex rounded-lg border-2 border-[#cab6ea] bg-[#efe6fb] p-1 shadow-sm">
                   <button
                     type="button"
-                    onClick={() => onUpdateSetting('generatorType', 'auto')}
-                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
-                      isAutoGenerator
-                        ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
-                        : 'text-[#5f5276] hover:bg-white'
-                    }`}
-                  >
-                    Auto Stencil Layers
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onUpdateSetting('generatorType', 'preset')}
-                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
-                      normalizedGenerator === 'preset'
-                        ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
-                        : 'text-[#5f5276] hover:bg-white'
-                    }`}
-                  >
-                    Geometric Presets
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => onUpdateSetting('generatorType', 'trace')}
                     className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
                       isTraceGenerator
@@ -3875,18 +3858,53 @@ function StencilStudioPanel({
                   >
                     Trace from Image
                   </button>
+                </div>
+                <div className="mt-2">
                   <button
                     type="button"
-                    onClick={() => onUpdateSetting('generatorType', 'legacy')}
-                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
-                      isLegacyGenerator
-                        ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
-                        : 'text-[#5f5276] hover:bg-white'
-                    }`}
+                    onClick={() => setShowAdvancedGenerator((value) => !value)}
+                    className="rounded-md border border-[#d7c7ee] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#6a5986] hover:bg-[#f6f0ff]"
                   >
-                    Legacy Image
+                    {showAdvancedGenerator ? 'Hide Advanced' : 'Show Advanced'}
                   </button>
                 </div>
+                {showAdvancedGenerator ? (
+                  <div className="mt-2 inline-flex rounded-lg border border-[#d7c7ee] bg-white p-1">
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('generatorType', 'preset')}
+                      className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-all ${
+                        normalizedGenerator === 'preset'
+                          ? 'bg-[#a58bc4] text-[#3f3254]'
+                          : 'text-[#5f5276] hover:bg-[#f6f0ff]'
+                      }`}
+                    >
+                      Presets
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('generatorType', 'auto')}
+                      className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-all ${
+                        isAutoGenerator
+                          ? 'bg-[#a58bc4] text-[#3f3254]'
+                          : 'text-[#5f5276] hover:bg-[#f6f0ff]'
+                      }`}
+                    >
+                      Auto Layers
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('generatorType', 'legacy')}
+                      className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-all ${
+                        isLegacyGenerator
+                          ? 'bg-[#a58bc4] text-[#3f3254]'
+                          : 'text-[#5f5276] hover:bg-[#f6f0ff]'
+                      }`}
+                    >
+                      Legacy
+                    </button>
+                  </div>
+                ) : null}
               </div>
 
               <div>
