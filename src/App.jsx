@@ -646,6 +646,8 @@ function createPosterizedStencilLayers(
     }
 
     const warmAccent = { r: 0, g: 0, b: 0, weight: 0, count: 0 }
+    const orangeAccent = { r: 0, g: 0, b: 0, weight: 0, count: 0 }
+    const yellowAccent = { r: 0, g: 0, b: 0, weight: 0, count: 0 }
     for (let i = 0; i < source.data.length; i += 4) {
       const r = source.data[i]
       const g = source.data[i + 1]
@@ -661,6 +663,22 @@ function createPosterizedStencilLayers(
       warmAccent.b += b * weight
       warmAccent.weight += weight
       warmAccent.count += 1
+      const isOrange = h >= 12 && h < 42 && s >= 26 && l >= 14 && l <= 88
+      const isYellow = h >= 42 && h <= 70 && s >= 18 && l >= 18 && l <= 92
+      if (isOrange) {
+        orangeAccent.r += r * weight
+        orangeAccent.g += g * weight
+        orangeAccent.b += b * weight
+        orangeAccent.weight += weight
+        orangeAccent.count += 1
+      }
+      if (isYellow) {
+        yellowAccent.r += r * weight
+        yellowAccent.g += g * weight
+        yellowAccent.b += b * weight
+        yellowAccent.weight += weight
+        yellowAccent.count += 1
+      }
     }
     const warmAccentCentroid =
       warmAccent.weight > 0 && warmAccent.count > Math.max(18, Math.floor((width * height) / 18000))
@@ -668,6 +686,24 @@ function createPosterizedStencilLayers(
             r: warmAccent.r / warmAccent.weight,
             g: warmAccent.g / warmAccent.weight,
             b: warmAccent.b / warmAccent.weight,
+          }
+        : null
+    const orangeAccentCentroid =
+      orangeAccent.weight > 0 && orangeAccent.count > Math.max(6, Math.floor((width * height) / 50000))
+        ? {
+            r: orangeAccent.r / orangeAccent.weight,
+            g: orangeAccent.g / orangeAccent.weight,
+            b: orangeAccent.b / orangeAccent.weight,
+            protectedTag: 'orange',
+          }
+        : null
+    const yellowAccentCentroid =
+      yellowAccent.weight > 0 && yellowAccent.count > Math.max(6, Math.floor((width * height) / 50000))
+        ? {
+            r: yellowAccent.r / yellowAccent.weight,
+            g: yellowAccent.g / yellowAccent.weight,
+            b: yellowAccent.b / yellowAccent.weight,
+            protectedTag: 'yellow',
           }
         : null
 
@@ -736,29 +772,28 @@ function createPosterizedStencilLayers(
       selected.push({ ...fallback, count: 1 })
     }
 
-    if (warmAccentCentroid) {
-      const minWarmDistance = selected.length
+    const protectedSeeds = []
+    if (orangeAccentCentroid) protectedSeeds.push(orangeAccentCentroid)
+    if (yellowAccentCentroid) protectedSeeds.push(yellowAccentCentroid)
+    if (warmAccentCentroid) protectedSeeds.push({ ...warmAccentCentroid, protectedTag: 'warm' })
+    let replacementOffset = 1
+    protectedSeeds.forEach((seed) => {
+      const minSeedDistance = selected.length
         ? Math.min(
             ...selected.map((picked) =>
-              rgbTripletDistance(
-                warmAccentCentroid.r,
-                warmAccentCentroid.g,
-                warmAccentCentroid.b,
-                picked.r,
-                picked.g,
-                picked.b,
-              ),
+              rgbTripletDistance(seed.r, seed.g, seed.b, picked.r, picked.g, picked.b),
             ),
           )
         : Number.POSITIVE_INFINITY
-      if (minWarmDistance > 24) {
-        selected[selected.length - 1] = {
-          ...warmAccentCentroid,
-          count: Math.max(1, warmAccent.count),
-          score: Number.POSITIVE_INFINITY,
-        }
+      if (minSeedDistance <= 24) return
+      const replaceAt = Math.max(0, selected.length - replacementOffset)
+      selected[replaceAt] = {
+        ...seed,
+        count: Math.max(1, seed.protectedTag === 'warm' ? warmAccent.count : 1),
+        score: Number.POSITIVE_INFINITY,
       }
-    }
+      replacementOffset += 1
+    })
 
     const sortedCentroids = selected
       .slice(0, steps)
@@ -776,6 +811,8 @@ function createPosterizedStencilLayers(
             ) < 30,
         )
       : -1
+    const orangeLayerIndex = sortedCentroids.findIndex((centroid) => centroid?.protectedTag === 'orange')
+    const yellowLayerIndex = sortedCentroids.findIndex((centroid) => centroid?.protectedTag === 'yellow')
 
     const layers = Array.from({ length: steps }, (_, index) => ({
       index,
@@ -805,8 +842,26 @@ function createPosterizedStencilLayers(
       let winningIndex = 0
       let winningDistance = Number.POSITIVE_INFINITY
       const hsl = rgbToHslTuple(r, g, b)
+      const isOrangePixel = hsl.h >= 10 && hsl.h < 45 && hsl.s >= 24 && hsl.l >= 10 && hsl.l <= 88
+      const isYellowPixel = hsl.h >= 42 && hsl.h <= 72 && hsl.s >= 14 && hsl.l >= 15 && hsl.l <= 92
       const isWarmPixel = hsl.h >= 10 && hsl.h <= 62 && hsl.s >= 34 && hsl.l >= 16 && hsl.l <= 88
       let warmLocked = false
+      if (orangeLayerIndex >= 0 && isOrangePixel) {
+        const orangeCentroid = layers[orangeLayerIndex].centroid || { r: 230, g: 140, b: 60 }
+        const orangeDistance = rgbTripletDistance(r, g, b, orangeCentroid.r, orangeCentroid.g, orangeCentroid.b)
+        if (orangeDistance < 110) {
+          winningIndex = orangeLayerIndex
+          warmLocked = true
+        }
+      }
+      if (!warmLocked && yellowLayerIndex >= 0 && isYellowPixel) {
+        const yellowCentroid = layers[yellowLayerIndex].centroid || { r: 232, g: 214, b: 118 }
+        const yellowDistance = rgbTripletDistance(r, g, b, yellowCentroid.r, yellowCentroid.g, yellowCentroid.b)
+        if (yellowDistance < 110) {
+          winningIndex = yellowLayerIndex
+          warmLocked = true
+        }
+      }
       if (warmLayerIndex >= 0 && isWarmPixel) {
         const warmCentroid = layers[warmLayerIndex].centroid || { r: 210, g: 140, b: 60 }
         const warmDistance = rgbTripletDistance(r, g, b, warmCentroid.r, warmCentroid.g, warmCentroid.b)
@@ -845,7 +900,9 @@ function createPosterizedStencilLayers(
 
     const minPixels = Math.max(16, Math.floor((width * height) / 14000))
     const generated = layers.map((layer) => {
-      if (layer.colorStats.count < minPixels) {
+      const isProtectedAccent = Boolean(layer.centroid?.protectedTag)
+      const requiredPixels = isProtectedAccent ? 4 : minPixels
+      if (layer.colorStats.count < requiredPixels) {
         for (let i = 0; i < layer.imageData.data.length; i += 4) {
           layer.imageData.data[i] = 255
           layer.imageData.data[i + 1] = 255
