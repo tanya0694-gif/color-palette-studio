@@ -963,6 +963,190 @@ function cropBinaryImageData(imageData, bounds, padding = 0) {
   return out
 }
 
+function createBlankMask(width, height) {
+  const data = new Uint8ClampedArray(width * height * 4)
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = 255
+    data[i + 1] = 255
+    data[i + 2] = 255
+    data[i + 3] = 255
+  }
+  return new ImageData(data, width, height)
+}
+
+function drawPlusSquarePreset(fillMask, { density = 6, motifScale = 55, angle = 0 } = {}) {
+  const width = fillMask.width
+  const height = fillMask.height
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return fillMask
+
+  const densityNorm = Math.max(2, Math.min(10, Number(density) || 6))
+  const tile = Math.max(26, Math.round(120 - densityNorm * 9))
+  const scale = Math.max(30, Math.min(90, Number(motifScale) || 55)) / 100
+  const plusSize = tile * scale * 0.72
+  const plusArm = Math.max(4, plusSize * 0.35)
+  const squareSize = Math.max(4, tile * scale * 0.22)
+  const angleRad = ((Number(angle) || 0) * Math.PI) / 180
+
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, width, height)
+  ctx.fillStyle = '#000000'
+  ctx.translate(width / 2, height / 2)
+  ctx.rotate(angleRad)
+  ctx.translate(-width / 2, -height / 2)
+
+  const startX = -tile * 2
+  const startY = -tile * 2
+  const endX = width + tile * 2
+  const endY = height + tile * 2
+
+  for (let y = startY, row = 0; y < endY; y += tile, row += 1) {
+    const xOffset = row % 2 === 0 ? 0 : tile * 0.5
+    for (let x = startX; x < endX; x += tile) {
+      const cx = x + xOffset + tile * 0.5
+      const cy = y + tile * 0.5
+
+      ctx.fillRect(cx - plusArm / 2, cy - plusSize / 2, plusArm, plusSize)
+      ctx.fillRect(cx - plusSize / 2, cy - plusArm / 2, plusSize, plusArm)
+
+      const sx = x + xOffset + tile * 0.1
+      const sy = y + tile * 0.1
+      ctx.fillRect(sx, sy, squareSize, squareSize)
+    }
+  }
+
+  const rendered = ctx.getImageData(0, 0, width, height)
+  for (let i = 0; i < rendered.data.length; i += 4) {
+    const value = rendered.data[i] < 128 ? 0 : 255
+    fillMask.data[i] = value
+    fillMask.data[i + 1] = value
+    fillMask.data[i + 2] = value
+    fillMask.data[i + 3] = 255
+  }
+  return fillMask
+}
+
+function drawGeoLatticePreset(fillMask, { density = 6, motifScale = 55, angle = 0 } = {}) {
+  const width = fillMask.width
+  const height = fillMask.height
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return fillMask
+
+  const densityNorm = Math.max(2, Math.min(10, Number(density) || 6))
+  const tile = Math.max(34, Math.round(150 - densityNorm * 11))
+  const scale = Math.max(30, Math.min(90, Number(motifScale) || 55)) / 100
+  const motif = tile * scale
+  const barW = Math.max(6, motif * 0.2)
+  const barL = Math.max(10, motif * 0.7)
+  const angleRad = ((Number(angle) || 0) * Math.PI) / 180
+
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, width, height)
+  ctx.fillStyle = '#000000'
+  ctx.translate(width / 2, height / 2)
+  ctx.rotate(angleRad)
+  ctx.translate(-width / 2, -height / 2)
+
+  const startX = -tile * 2
+  const startY = -tile * 2
+  const endX = width + tile * 2
+  const endY = height + tile * 2
+
+  for (let y = startY, row = 0; y < endY; y += tile, row += 1) {
+    const xOffset = row % 2 === 0 ? 0 : tile * 0.5
+    for (let x = startX; x < endX; x += tile) {
+      const cx = x + xOffset + tile * 0.5
+      const cy = y + tile * 0.5
+
+      ctx.fillRect(cx - barW / 2, cy - barL / 2, barW, barL)
+      ctx.fillRect(cx - barL / 2, cy - barW / 2, barL, barW)
+      ctx.fillRect(cx - barL / 2, cy - barL / 2, barW, barL * 0.55)
+      ctx.fillRect(cx + barL / 2 - barW, cy - barL * 0.1, barW, barL * 0.6)
+
+      const mini = Math.max(4, barW * 0.9)
+      ctx.fillRect(cx + tile * 0.18 - mini / 2, cy + tile * 0.18 - mini / 2, mini, mini)
+    }
+  }
+
+  const rendered = ctx.getImageData(0, 0, width, height)
+  for (let i = 0; i < rendered.data.length; i += 4) {
+    const value = rendered.data[i] < 128 ? 0 : 255
+    fillMask.data[i] = value
+    fillMask.data[i + 1] = value
+    fillMask.data[i + 2] = value
+    fillMask.data[i + 3] = 255
+  }
+  return fillMask
+}
+
+function createGeometricPresetLayers({
+  paperSize = '5x7',
+  orientation = 'portrait',
+  presetFamily = 'plus-square',
+  presetDensity = 6,
+  presetMotifScale = 55,
+  presetAngle = 0,
+  outlineWidth = 2,
+} = {}) {
+  const { widthPx, heightPx } = getStencilCanvasSize(paperSize, orientation)
+  let fillMask = createBlankMask(widthPx, heightPx)
+  fillMask =
+    presetFamily === 'geo-lattice'
+      ? drawGeoLatticePreset(fillMask, {
+          density: presetDensity,
+          motifScale: presetMotifScale,
+          angle: presetAngle,
+        })
+      : drawPlusSquarePreset(fillMask, {
+          density: presetDensity,
+          motifScale: presetMotifScale,
+          angle: presetAngle,
+        })
+
+  erodeBinaryMask(fillMask, 1)
+  dilateBinaryMask(fillMask, 1)
+
+  const grown = new ImageData(new Uint8ClampedArray(fillMask.data), fillMask.width, fillMask.height)
+  dilateBinaryMask(grown, Math.max(1, Math.min(8, Math.round(outlineWidth))))
+  const outlineMask = createBlankMask(fillMask.width, fillMask.height)
+  for (let i = 0; i < outlineMask.data.length; i += 4) {
+    const inGrown = grown.data[i] < 128
+    const inFill = fillMask.data[i] < 128
+    const value = inGrown && !inFill ? 0 : 255
+    outlineMask.data[i] = value
+    outlineMask.data[i + 1] = value
+    outlineMask.data[i + 2] = value
+    outlineMask.data[i + 3] = 255
+  }
+
+  smoothBinaryMask(outlineMask, 1)
+
+  return [
+    {
+      index: 0,
+      name: 'Fill Layer',
+      hint: presetFamily === 'geo-lattice' ? 'Geometric fills' : 'Pluses + squares',
+      imageData: fillMask,
+      previewUrl: imageDataToDataUrl(fillMask),
+      colorHex: presetFamily === 'geo-lattice' ? '#3A5A73' : '#C76E9A',
+    },
+    {
+      index: 1,
+      name: 'Outline Layer',
+      hint: `Lattice linework (width ${outlineWidth})`,
+      imageData: outlineMask,
+      previewUrl: imageDataToDataUrl(outlineMask),
+      colorHex: '#8D8D8D',
+    },
+  ]
+}
+
 function createTwoLayerPatternMasks(
   img,
   {
@@ -2586,6 +2770,7 @@ function StencilStudioPanel({
     vectorPreviewMode === 'stacked'
       ? compositePreviewSvg || stencilSvg
       : cutPreviewSvg || stencilSvg || compositePreviewSvg
+  const useImageGenerator = stencilSettings.generatorType !== 'preset'
 
   function HelpTip({ text }) {
     const [open, setOpen] = useState(false)
@@ -2636,14 +2821,16 @@ function StencilStudioPanel({
           <div className="min-w-0">
             <h2 className="font-display text-2xl font-semibold text-[#3f3254] md:text-3xl">Stencil Studio</h2>
             <p className="text-sm text-[#7f7468]">
-              Upload an image, tune the cutoff, and export stencil-ready SVG vectors.
+              {useImageGenerator
+                ? 'Upload an image, tune controls, and export Cricut-ready SVG vectors.'
+                : 'Use geometric presets for clean two-layer lattice stencils.'}
             </p>
           </div>
           <div className="flex gap-2">
             <button
               type="button"
               onClick={onGenerate}
-              disabled={!stencilImageFile || stencilBusy}
+              disabled={(useImageGenerator && !stencilImageFile) || stencilBusy}
               className="rounded-lg border border-[#8e72b5] bg-gradient-to-r from-[#b39ad6] to-[#9f84c5] px-4 py-2 text-sm font-semibold text-[#302442] shadow-sm hover:from-[#a88fd0] hover:to-[#9577bd] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {stencilBusy ? 'Vectorizing...' : 'Generate Stencil'}
@@ -2672,120 +2859,192 @@ function StencilStudioPanel({
             <div className="space-y-4">
               <div>
                 <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                  Source Image
+                  Generator
                 </label>
-                <div
-                  onDragEnter={(e) => {
-                    e.preventDefault()
-                    setIsDragActive(true)
-                  }}
-                  onDragOver={(e) => {
-                    e.preventDefault()
-                    setIsDragActive(true)
-                  }}
-                  onDragLeave={(e) => {
-                    e.preventDefault()
-                    setIsDragActive(false)
-                  }}
-                  onDrop={handleDrop}
-                  className={`rounded-lg border-2 border-dashed p-2 transition ${
-                    isDragActive
-                      ? 'border-[#9678b8] bg-[#f5effd]'
-                      : 'border-[#d9cfc4] bg-white'
-                  }`}
-                >
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => onImageChange(e.target.files?.[0] || null)}
-                    className="w-full rounded-lg border border-[#d9cfc4] bg-white p-2 text-sm"
-                  />
-                  <p className="mt-1 px-1 text-[11px] text-[#8b7b6b]">Or drag and drop an image here</p>
+                <div className="inline-flex rounded-lg border-2 border-[#cab6ea] bg-[#efe6fb] p-1 shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSetting('generatorType', 'preset')}
+                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
+                      stencilSettings.generatorType === 'preset'
+                        ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
+                        : 'text-[#5f5276] hover:bg-white'
+                    }`}
+                  >
+                    Geometric Presets
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSetting('generatorType', 'image')}
+                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
+                      useImageGenerator
+                        ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
+                        : 'text-[#5f5276] hover:bg-white'
+                    }`}
+                  >
+                    Image Stencil
+                  </button>
                 </div>
-                <label className="mt-2 flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
+              </div>
+
+              <div>
+                {useImageGenerator ? (
+                  <>
+                    <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                      Source Image
+                    </label>
+                    <div
+                      onDragEnter={(e) => {
+                        e.preventDefault()
+                        setIsDragActive(true)
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault()
+                        setIsDragActive(true)
+                      }}
+                      onDragLeave={(e) => {
+                        e.preventDefault()
+                        setIsDragActive(false)
+                      }}
+                      onDrop={handleDrop}
+                      className={`rounded-lg border-2 border-dashed p-2 transition ${
+                        isDragActive
+                          ? 'border-[#9678b8] bg-[#f5effd]'
+                          : 'border-[#d9cfc4] bg-white'
+                      }`}
+                    >
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => onImageChange(e.target.files?.[0] || null)}
+                        className="w-full rounded-lg border border-[#d9cfc4] bg-white p-2 text-sm"
+                      />
+                      <p className="mt-1 px-1 text-[11px] text-[#8b7b6b]">Or drag and drop an image here</p>
+                    </div>
+                    <label className="mt-2 flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(stencilSettings.autoStraighten)}
+                        onChange={(e) => onUpdateSetting('autoStraighten', e.target.checked)}
+                        className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
+                      />
+                      Auto straighten image angle
+                      <HelpTip text="Detects the dominant pattern angle and rotates before vectorizing. Helpful for tilted phone photos." />
+                    </label>
+                    {Math.abs(stencilStraightenAngle) > 0.01 ? (
+                      <p className="mt-1 text-[11px] text-[#7f7468]">
+                        Applied straighten: {stencilStraightenAngle > 0 ? '+' : ''}
+                        {stencilStraightenAngle.toFixed(1)}°
+                      </p>
+                    ) : null}
+                    <div className="mt-2 flex items-center gap-2">
+                      <label className="flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
+                        <input
+                          type="checkbox"
+                          checked={stencilRectifyEnabled}
+                          onChange={(e) => onToggleRectify(e.target.checked)}
+                          className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
+                        />
+                        Manual 4-corner rectify
+                        <HelpTip text="Drag the 4 corner points on the preview to align the pattern area before tracing." />
+                      </label>
+                      {stencilRectifyEnabled ? (
+                        <button
+                          type="button"
+                          onClick={onResetRectifyCorners}
+                          className="rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-2 py-1 text-[11px] font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
+                        >
+                          Reset
+                        </button>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] px-3 py-2 text-xs text-[#6b5b4f]">
+                    No upload needed. Pick a preset family below and generate clean Cricut-ready layers.
+                  </div>
+                )}
+              </div>
+
+              {useImageGenerator ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Straighten Adjust ({Number(stencilSettings.straightenAdjust || 0).toFixed(1)}°)</span>
+                    <HelpTip text="Manual rotation tweak on top of auto-straighten. Use this when repeats still look slanted." />
+                  </div>
                   <input
-                    type="checkbox"
-                    checked={Boolean(stencilSettings.autoStraighten)}
-                    onChange={(e) => onUpdateSetting('autoStraighten', e.target.checked)}
-                    className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
+                    type="range"
+                    min={-15}
+                    max={15}
+                    step={0.5}
+                    value={Number(stencilSettings.straightenAdjust || 0)}
+                    onChange={(e) => onUpdateSetting('straightenAdjust', Number(e.target.value))}
+                    className="w-full accent-[#9678b8]"
                   />
-                  Auto straighten image angle
-                  <HelpTip text="Detects the dominant pattern angle and rotates before vectorizing. Helpful for tilted phone photos." />
-                </label>
-                {Math.abs(stencilStraightenAngle) > 0.01 ? (
-                  <p className="mt-1 text-[11px] text-[#7f7468]">
-                    Applied straighten: {stencilStraightenAngle > 0 ? '+' : ''}
-                    {stencilStraightenAngle.toFixed(1)}°
-                  </p>
-                ) : null}
-                <div className="mt-2 flex items-center gap-2">
-                  <label className="flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
-                    <input
-                      type="checkbox"
-                      checked={stencilRectifyEnabled}
-                      onChange={(e) => onToggleRectify(e.target.checked)}
-                      className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
-                    />
-                    Manual 4-corner rectify
-                    <HelpTip text="Drag the 4 corner points on the preview to align the pattern area before tracing." />
+                </div>
+              ) : null}
+
+              {useImageGenerator ? (
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    Output Mode
                   </label>
-                  {stencilRectifyEnabled ? (
+                  <div className="inline-flex flex-wrap rounded-lg border-2 border-[#cab6ea] bg-[#efe6fb] p-1 shadow-sm">
                     <button
                       type="button"
-                      onClick={onResetRectifyCorners}
-                      className="rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-2 py-1 text-[11px] font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
+                      onClick={() => onUpdateSetting('mode', 'multi')}
+                      className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
+                        stencilSettings.mode === 'multi'
+                          ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
+                          : 'text-[#5f5276] hover:bg-white'
+                      }`}
                     >
-                      Reset
+                      Layered Image
                     </button>
-                  ) : null}
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('mode', 'pattern')}
+                      className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
+                        stencilSettings.mode === 'pattern'
+                          ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
+                          : 'text-[#5f5276] hover:bg-white'
+                      }`}
+                    >
+                      Repeat Pattern
+                    </button>
+                  </div>
                 </div>
-              </div>
-
-              <div>
-                <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                  <span>Straighten Adjust ({Number(stencilSettings.straightenAdjust || 0).toFixed(1)}°)</span>
-                  <HelpTip text="Manual rotation tweak on top of auto-straighten. Use this when repeats still look slanted." />
+              ) : (
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    Preset Family
+                  </label>
+                  <div className="inline-flex flex-wrap rounded-lg border-2 border-[#cab6ea] bg-[#efe6fb] p-1 shadow-sm">
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('presetFamily', 'plus-square')}
+                      className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
+                        stencilSettings.presetFamily === 'plus-square'
+                          ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
+                          : 'text-[#5f5276] hover:bg-white'
+                      }`}
+                    >
+                      Plus + Square
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('presetFamily', 'geo-lattice')}
+                      className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
+                        stencilSettings.presetFamily === 'geo-lattice'
+                          ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
+                          : 'text-[#5f5276] hover:bg-white'
+                      }`}
+                    >
+                      Geo Lattice
+                    </button>
+                  </div>
                 </div>
-                <input
-                  type="range"
-                  min={-15}
-                  max={15}
-                  step={0.5}
-                  value={Number(stencilSettings.straightenAdjust || 0)}
-                  onChange={(e) => onUpdateSetting('straightenAdjust', Number(e.target.value))}
-                  className="w-full accent-[#9678b8]"
-                />
-              </div>
-
-              <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                  Output Mode
-                </label>
-                <div className="inline-flex flex-wrap rounded-lg border-2 border-[#cab6ea] bg-[#efe6fb] p-1 shadow-sm">
-                  <button
-                    type="button"
-                    onClick={() => onUpdateSetting('mode', 'multi')}
-                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
-                      stencilSettings.mode === 'multi'
-                        ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
-                        : 'text-[#5f5276] hover:bg-white'
-                    }`}
-                  >
-                    Layered Image
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onUpdateSetting('mode', 'pattern')}
-                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
-                      stencilSettings.mode === 'pattern'
-                        ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
-                        : 'text-[#5f5276] hover:bg-white'
-                    }`}
-                  >
-                    Repeat Pattern
-                  </button>
-                </div>
-              </div>
+              )}
 
               <div>
                 <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
@@ -2847,7 +3106,7 @@ function StencilStudioPanel({
                 </div>
               </div>
 
-              {stencilSettings.mode === 'pattern' ? (
+              {useImageGenerator && stencilSettings.mode === 'pattern' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Repeat Style</span>
@@ -2880,7 +3139,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {stencilSettings.mode === 'pattern' ? (
+              {useImageGenerator && stencilSettings.mode === 'pattern' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Outline Source</span>
@@ -2913,7 +3172,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {stencilSettings.mode === 'pattern' && stencilSettings.outlineSource === 'fromFill' ? (
+              {useImageGenerator && stencilSettings.mode === 'pattern' && stencilSettings.outlineSource === 'fromFill' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Outline Width ({stencilSettings.outlineWidth})</span>
@@ -2930,7 +3189,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {stencilSettings.mode === 'pattern' ? (
+              {useImageGenerator && stencilSettings.mode === 'pattern' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Pattern Scale ({stencilSettings.tileScale}%)</span>
@@ -2947,7 +3206,76 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {stencilSettings.mode === 'multi' ? (
+              {!useImageGenerator ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Pattern Density ({stencilSettings.presetDensity})</span>
+                    <HelpTip text="Higher density creates more motifs across the page." />
+                  </div>
+                  <input
+                    type="range"
+                    min={2}
+                    max={10}
+                    value={Number(stencilSettings.presetDensity || 6)}
+                    onChange={(e) => onUpdateSetting('presetDensity', Number(e.target.value))}
+                    className="w-full accent-[#9678b8]"
+                  />
+                </div>
+              ) : null}
+
+              {!useImageGenerator ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Motif Scale ({stencilSettings.presetMotifScale}%)</span>
+                    <HelpTip text="Controls motif size inside each repeat cell." />
+                  </div>
+                  <input
+                    type="range"
+                    min={35}
+                    max={85}
+                    value={Number(stencilSettings.presetMotifScale || 55)}
+                    onChange={(e) => onUpdateSetting('presetMotifScale', Number(e.target.value))}
+                    className="w-full accent-[#9678b8]"
+                  />
+                </div>
+              ) : null}
+
+              {!useImageGenerator ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Pattern Angle ({Number(stencilSettings.presetAngle || 0).toFixed(1)}°)</span>
+                    <HelpTip text="Rotates the generated preset pattern on the page." />
+                  </div>
+                  <input
+                    type="range"
+                    min={-25}
+                    max={25}
+                    step={0.5}
+                    value={Number(stencilSettings.presetAngle || 0)}
+                    onChange={(e) => onUpdateSetting('presetAngle', Number(e.target.value))}
+                    className="w-full accent-[#9678b8]"
+                  />
+                </div>
+              ) : null}
+
+              {!useImageGenerator ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Outline Width ({stencilSettings.outlineWidth})</span>
+                    <HelpTip text="Thickness of the generated lattice outline layer." />
+                  </div>
+                  <input
+                    type="range"
+                    min={1}
+                    max={6}
+                    value={stencilSettings.outlineWidth}
+                    onChange={(e) => onUpdateSetting('outlineWidth', Number(e.target.value))}
+                    className="w-full accent-[#9678b8]"
+                  />
+                </div>
+              ) : null}
+
+              {useImageGenerator && stencilSettings.mode === 'multi' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Layers ({stencilSettings.layerCount})</span>
@@ -2964,7 +3292,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {stencilSettings.mode === 'multi' ? (
+              {useImageGenerator && stencilSettings.mode === 'multi' ? (
                 <label className="flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
                   <input
                     type="checkbox"
@@ -2977,68 +3305,76 @@ function StencilStudioPanel({
                 </label>
               ) : null}
 
-              <div>
-                <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                  <span>Detail ({stencilSettings.detail})</span>
-                  <HelpTip text="Higher preserves corners and complexity; lower simplifies and smooths shapes." />
+              {useImageGenerator ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Detail ({stencilSettings.detail})</span>
+                    <HelpTip text="Higher preserves corners and complexity; lower simplifies and smooths shapes." />
+                  </div>
+                  <input
+                    type="range"
+                    min={1}
+                    max={10}
+                    value={stencilSettings.detail}
+                    onChange={(e) => onUpdateSetting('detail', Number(e.target.value))}
+                    className="w-full accent-[#9678b8]"
+                  />
                 </div>
-                <input
-                  type="range"
-                  min={1}
-                  max={10}
-                  value={stencilSettings.detail}
-                  onChange={(e) => onUpdateSetting('detail', Number(e.target.value))}
-                  className="w-full accent-[#9678b8]"
-                />
-              </div>
+              ) : null}
 
-              <div>
-                <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                  <span>Noise Filter ({stencilSettings.noiseFilter})</span>
-                  <HelpTip text="Removes tiny fragments/specks. Keep low (0-2) for intricate designs; increase to clean messy imports." />
+              {useImageGenerator ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Noise Filter ({stencilSettings.noiseFilter})</span>
+                    <HelpTip text="Removes tiny fragments/specks. Keep low (0-2) for intricate designs; increase to clean messy imports." />
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={30}
+                    value={stencilSettings.noiseFilter}
+                    onChange={(e) => onUpdateSetting('noiseFilter', Number(e.target.value))}
+                    className="w-full accent-[#9678b8]"
+                  />
                 </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={30}
-                  value={stencilSettings.noiseFilter}
-                  onChange={(e) => onUpdateSetting('noiseFilter', Number(e.target.value))}
-                  className="w-full accent-[#9678b8]"
-                />
-              </div>
+              ) : null}
 
-              <div>
-                <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                  <span>Bridge Width ({stencilSettings.bridgeWidth})</span>
-                  <HelpTip text="Adds stroke thickness and joins for stronger physical stencils. Keep 0 for cleaner pure vector shapes." />
+              {useImageGenerator ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Bridge Width ({stencilSettings.bridgeWidth})</span>
+                    <HelpTip text="Adds stroke thickness and joins for stronger physical stencils. Keep 0 for cleaner pure vector shapes." />
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={6}
+                    step={0.5}
+                    value={stencilSettings.bridgeWidth}
+                    onChange={(e) => onUpdateSetting('bridgeWidth', Number(e.target.value))}
+                    className="w-full accent-[#9678b8]"
+                  />
                 </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={6}
-                  step={0.5}
-                  value={stencilSettings.bridgeWidth}
-                  onChange={(e) => onUpdateSetting('bridgeWidth', Number(e.target.value))}
-                  className="w-full accent-[#9678b8]"
-                />
-              </div>
+              ) : null}
 
-              <label className="flex items-center gap-2 text-sm text-[#5c4a3d]">
-                <input
-                  type="checkbox"
-                  checked={stencilSettings.invert}
-                  onChange={(e) => onUpdateSetting('invert', e.target.checked)}
-                  className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
-                />
-                Invert stencil (light areas become cutouts)
-              </label>
+              {useImageGenerator ? (
+                <label className="flex items-center gap-2 text-sm text-[#5c4a3d]">
+                  <input
+                    type="checkbox"
+                    checked={stencilSettings.invert}
+                    onChange={(e) => onUpdateSetting('invert', e.target.checked)}
+                    className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
+                  />
+                  Invert stencil (light areas become cutouts)
+                </label>
+              ) : null}
             </div>
           </aside>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div className="rounded-xl border border-[#d7c7ee] bg-[#fcf9ff] p-4">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Preview</p>
-              {stencilImagePreviewUrl ? (
+              {useImageGenerator && stencilImagePreviewUrl ? (
                 <div
                   className="relative h-[280px] w-full overflow-hidden rounded-lg border border-[#eee5db] bg-white"
                   onMouseMove={handleCornerDrag}
@@ -3080,9 +3416,13 @@ function StencilStudioPanel({
                       })
                     : null}
                 </div>
-              ) : (
+              ) : useImageGenerator ? (
                 <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed border-[#ddd0c1] bg-[#faf7f4] text-sm text-[#8b7b6b]">
                   Upload an image to start.
+                </div>
+              ) : (
+                <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed border-[#ddd0c1] bg-[#faf7f4] px-4 text-center text-sm text-[#8b7b6b]">
+                  Geometric preset mode: no upload needed. Pick a family and generate clean 2-layer stencils.
                 </div>
               )}
             </div>
@@ -3138,7 +3478,9 @@ function StencilStudioPanel({
               ) : null}
             </div>
             <p className="text-xs text-[#9a8d80]">
-              {stencilSettings.mode === 'pattern'
+              {stencilSettings.generatorType === 'preset'
+                ? 'Preset mode: Fill and Outline layers are generated as clean Cricut-ready vectors.'
+                : stencilSettings.mode === 'pattern'
                 ? 'Pattern mode: first layer preview shown (fills), second layer in Generated Layers.'
                 : stencilSettings.mode === 'multi'
                 ? vectorPreviewMode === 'stacked'
@@ -3221,11 +3563,16 @@ function StencilStudioPanel({
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium text-[#5c4a3d]">{entry.name}</p>
                     <p className="text-xs text-[#8b7b6b]">
-                      {entry.mode === 'pattern'
-                        ? 'Repeat Pattern Stencils'
-                        : entry.mode === 'multi'
-                          ? 'Layered Image Stencils'
-                          : 'Stencil'} •{' '}
+                      {(entry.settings?.generatorType || 'image') === 'preset'
+                        ? entry.settings?.presetFamily === 'geo-lattice'
+                          ? 'Geo Lattice Preset'
+                          : 'Plus Square Preset'
+                        : entry.mode === 'pattern'
+                          ? 'Repeat Pattern Stencils'
+                          : entry.mode === 'multi'
+                            ? 'Layered Image Stencils'
+                            : 'Stencil'}{' '}
+                      •{' '}
                       {new Date(entry.createdAt).toLocaleDateString()}
                     </p>
                   </div>
@@ -3461,6 +3808,7 @@ function App() {
   const [stencilRectifyEnabled, setStencilRectifyEnabled] = useState(false)
   const [stencilRectifyCorners, setStencilRectifyCorners] = useState(DEFAULT_RECTIFY_CORNERS)
   const [stencilSettings, setStencilSettings] = useState({
+    generatorType: 'image',
     mode: 'multi',
     threshold: 140,
     detail: 6,
@@ -3472,6 +3820,10 @@ function App() {
     orientation: 'portrait',
     tileScale: 100,
     repeatStyle: 'seamless',
+    presetFamily: 'plus-square',
+    presetDensity: 6,
+    presetMotifScale: 55,
+    presetAngle: 0,
     outlineSource: 'fromFill',
     outlineWidth: 2,
     autoStraighten: true,
@@ -3969,7 +4321,7 @@ function App() {
   }
 
   async function generateStencilFromImage() {
-    if (!stencilImageFile) {
+    if (stencilSettings.generatorType !== 'preset' && !stencilImageFile) {
       setStencilError('Choose an image first.')
       return
     }
@@ -3978,6 +4330,39 @@ function App() {
       setStencilBusy(true)
       setStencilError('')
       setStencilLayers([])
+      if (stencilSettings.generatorType === 'preset') {
+        setStencilStraightenAngle(0)
+        const presetLayers = createGeometricPresetLayers({
+          paperSize: stencilSettings.paperSize,
+          orientation: stencilSettings.orientation,
+          presetFamily: stencilSettings.presetFamily,
+          presetDensity: stencilSettings.presetDensity,
+          presetMotifScale: stencilSettings.presetMotifScale,
+          presetAngle: stencilSettings.presetAngle,
+          outlineWidth: stencilSettings.outlineWidth,
+        })
+        const layerSvgs = presetLayers.map((layer) => {
+          const rawSvg = buildStencilSvg(layer.imageData, { detail: 9, noiseFilter: 1, bridgeWidth: 0 })
+          const svg = wrapSvgForStencilCanvas(rawSvg, {
+            paperSize: stencilSettings.paperSize,
+            orientation: stencilSettings.orientation,
+            mode: 'multi',
+          })
+          return {
+            index: layer.index,
+            name: layer.name,
+            hint: layer.hint,
+            previewUrl: layer.previewUrl,
+            colorHex: layer.colorHex || (layer.index === 0 ? '#C76E9A' : '#8D8D8D'),
+            svg,
+          }
+        })
+        setStencilProcessedPreviewUrl(layerSvgs[0]?.previewUrl || '')
+        setStencilSvg(layerSvgs[0]?.svg || '')
+        setStencilLayers(layerSvgs)
+        return
+      }
+
       const image = await loadImageFromFile(stencilImageFile)
       const autoRotationDeg = stencilSettings.autoStraighten ? -estimateDominantGridAngle(image) : 0
       const rotationDeg = autoRotationDeg + Number(stencilSettings.straightenAdjust || 0)
@@ -4098,7 +4483,10 @@ function App() {
     URL.revokeObjectURL(url)
   }
 
-  function getStencilModeLabel(mode) {
+  function getStencilModeLabel(mode, generatorType = 'image', presetFamily = 'plus-square') {
+    if (generatorType === 'preset') {
+      return presetFamily === 'geo-lattice' ? 'Geo Lattice Preset' : 'Plus Square Preset'
+    }
     if (mode === 'pattern') return 'Repeat Pattern Stencils'
     if (mode === 'multi') return 'Layered Image Stencils'
     return 'Stencil'
@@ -4106,7 +4494,11 @@ function App() {
 
   function saveStencilToLibrary() {
     if (!stencilSvg && stencilLayers.length === 0) return
-    const defaultName = `${getStencilModeLabel(stencilSettings.mode)} ${new Date().toLocaleDateString()}`
+    const defaultName = `${getStencilModeLabel(
+      stencilSettings.mode,
+      stencilSettings.generatorType,
+      stencilSettings.presetFamily,
+    )} ${new Date().toLocaleDateString()}`
     const provided = window.prompt('Name this stencil set for your library:', defaultName)
     if (provided === null) return
     const name = String(provided || '').trim() || defaultName
