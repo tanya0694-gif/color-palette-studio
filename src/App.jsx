@@ -3433,7 +3433,10 @@ function StencilStudioPanel({
   const [vectorZoom, setVectorZoom] = useState(1)
   const [showAdvancedGenerator, setShowAdvancedGenerator] = useState(false)
   const [vectorPan, setVectorPan] = useState({ x: 0, y: 0 })
+  const [pendingSplitColorField, setPendingSplitColorField] = useState(null)
   const vectorPanStateRef = useRef(null)
+  const previewImageRef = useRef(null)
+  const splitSamplerCanvasRef = useRef(null)
   const [isVectorPanning, setIsVectorPanning] = useState(false)
   const compositePreviewSvg = useMemo(
     () => buildCompositeLayerPreview(stencilLayers, { useLayerColor: true }),
@@ -3561,6 +3564,11 @@ function StencilStudioPanel({
     }
   }, [isVectorPanning])
 
+  useEffect(() => {
+    setPendingSplitColorField(null)
+    splitSamplerCanvasRef.current = null
+  }, [stencilImagePreviewUrl])
+
   function HelpTip({ text }) {
     const [open, setOpen] = useState(false)
     return (
@@ -3603,16 +3611,93 @@ function StencilStudioPanel({
     onUpdateRectifyCorner(dragCorner, { x, y })
   }
 
+  function sampleColorFromPreview(event, field) {
+    const image = previewImageRef.current
+    if (!image || !image.naturalWidth || !image.naturalHeight) return null
+
+    const bounds = image.getBoundingClientRect()
+    if (!bounds.width || !bounds.height) return null
+
+    const point = getPointerPoint(event)
+    const localX = point.clientX - bounds.left
+    const localY = point.clientY - bounds.top
+
+    const imageAspect = image.naturalWidth / image.naturalHeight
+    const boxAspect = bounds.width / bounds.height
+    let drawWidth = bounds.width
+    let drawHeight = bounds.height
+    let offsetX = 0
+    let offsetY = 0
+
+    if (imageAspect > boxAspect) {
+      drawHeight = drawWidth / imageAspect
+      offsetY = (bounds.height - drawHeight) / 2
+    } else {
+      drawWidth = drawHeight * imageAspect
+      offsetX = (bounds.width - drawWidth) / 2
+    }
+
+    if (
+      localX < offsetX ||
+      localY < offsetY ||
+      localX > offsetX + drawWidth ||
+      localY > offsetY + drawHeight
+    ) {
+      return null
+    }
+
+    const normalizedX = (localX - offsetX) / drawWidth
+    const normalizedY = (localY - offsetY) / drawHeight
+    const pixelX = Math.max(0, Math.min(image.naturalWidth - 1, Math.floor(normalizedX * image.naturalWidth)))
+    const pixelY = Math.max(0, Math.min(image.naturalHeight - 1, Math.floor(normalizedY * image.naturalHeight)))
+
+    let canvas = splitSamplerCanvasRef.current
+    if (!canvas || canvas.width !== image.naturalWidth || canvas.height !== image.naturalHeight) {
+      canvas = document.createElement('canvas')
+      canvas.width = image.naturalWidth
+      canvas.height = image.naturalHeight
+      const drawCtx = canvas.getContext('2d', { willReadFrequently: true })
+      if (!drawCtx) return null
+      drawCtx.drawImage(image, 0, 0, image.naturalWidth, image.naturalHeight)
+      splitSamplerCanvasRef.current = canvas
+    }
+
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return null
+    const pixel = ctx.getImageData(pixelX, pixelY, 1, 1).data
+    if (pixel[3] < 16) return null
+
+    const pickedHex = rgbToHex(pixel[0], pixel[1], pixel[2])
+    onUpdateSetting(field, pickedHex)
+    setPendingSplitColorField(null)
+    return pickedHex
+  }
+
+  function handlePreviewPickClick(event) {
+    if (!pendingSplitColorField) return
+    const picked = sampleColorFromPreview(event, pendingSplitColorField)
+    if (!picked) {
+      window.alert('Click directly on the visible image area to sample a color.')
+    }
+  }
+
   async function pickSplitColor(field) {
+    if (!stencilImagePreviewUrl) {
+      window.alert('Upload an image first, then pick a color.')
+      return
+    }
     if (!window.EyeDropper) {
-      window.alert('Eyedropper is not supported in this browser. Use the color box instead.')
+      setPendingSplitColorField(field)
       return
     }
     try {
       const eyeDropper = new window.EyeDropper()
       const result = await eyeDropper.open()
       const picked = normalizeHex(result?.sRGBHex)
-      if (picked) onUpdateSetting(field, picked)
+      if (picked) {
+        onUpdateSetting(field, picked)
+        setPendingSplitColorField(null)
+      }
     } catch {
       // User canceled eyedropper; no action needed.
     }
@@ -4116,7 +4201,7 @@ function StencilStudioPanel({
                     onClick={() => pickSplitColor('splitColorA')}
                     className="w-full rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f6f0ff]"
                   >
-                    Pick Layer 1 Color From Screen
+                    Pick Layer 1 Color
                   </button>
                   <label className="block text-xs font-medium text-[#6b5b4f]">
                     Layer 2 Color (Light)
@@ -4132,8 +4217,13 @@ function StencilStudioPanel({
                     onClick={() => pickSplitColor('splitColorB')}
                     className="w-full rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f6f0ff]"
                   >
-                    Pick Layer 2 Color From Screen
+                    Pick Layer 2 Color
                   </button>
+                  {pendingSplitColorField ? (
+                    <p className="rounded-md border border-[#d7c7ee] bg-white px-2 py-1 text-[11px] text-[#5e4a7f]">
+                      Picker active: click the image in the Preview panel to sample a color.
+                    </p>
+                  ) : null}
                   <div>
                     <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                       <span>Tolerance ({stencilSettings.splitTolerance})</span>
@@ -4276,9 +4366,11 @@ function StencilStudioPanel({
                   onMouseLeave={() => setDragCorner(null)}
                 >
                   <img
+                    ref={previewImageRef}
                     src={stencilImagePreviewUrl}
                     alt="Stencil source"
-                    className="h-full w-full object-contain"
+                    onClick={handlePreviewPickClick}
+                    className={`h-full w-full object-contain ${pendingSplitColorField ? 'cursor-crosshair' : ''}`}
                   />
                   {stencilRectifyEnabled ? (
                     <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
