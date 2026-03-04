@@ -918,6 +918,51 @@ function imageDataToDataUrl(imageData) {
   return canvas.toDataURL('image/png')
 }
 
+function getBinaryBounds(imageData, threshold = 128) {
+  const { data, width, height } = imageData
+  let minX = width
+  let minY = height
+  let maxX = -1
+  let maxY = -1
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = (y * width + x) * 4
+      if (data[idx] < threshold) {
+        if (x < minX) minX = x
+        if (y < minY) minY = y
+        if (x > maxX) maxX = x
+        if (y > maxY) maxY = y
+      }
+    }
+  }
+  if (maxX < minX || maxY < minY) {
+    return { minX: 0, minY: 0, maxX: width - 1, maxY: height - 1, empty: true }
+  }
+  return { minX, minY, maxX, maxY, empty: false }
+}
+
+function cropBinaryImageData(imageData, bounds, padding = 0) {
+  const { width, height, data } = imageData
+  const minX = Math.max(0, Math.floor(bounds.minX - padding))
+  const minY = Math.max(0, Math.floor(bounds.minY - padding))
+  const maxX = Math.min(width - 1, Math.ceil(bounds.maxX + padding))
+  const maxY = Math.min(height - 1, Math.ceil(bounds.maxY + padding))
+  const outWidth = Math.max(1, maxX - minX + 1)
+  const outHeight = Math.max(1, maxY - minY + 1)
+  const out = new ImageData(new Uint8ClampedArray(outWidth * outHeight * 4), outWidth, outHeight)
+  for (let y = 0; y < outHeight; y += 1) {
+    for (let x = 0; x < outWidth; x += 1) {
+      const srcIdx = ((minY + y) * width + (minX + x)) * 4
+      const dstIdx = (y * outWidth + x) * 4
+      out.data[dstIdx] = data[srcIdx]
+      out.data[dstIdx + 1] = data[srcIdx + 1]
+      out.data[dstIdx + 2] = data[srcIdx + 2]
+      out.data[dstIdx + 3] = 255
+    }
+  }
+  return out
+}
+
 function createTwoLayerPatternMasks(
   img,
   {
@@ -1104,6 +1149,18 @@ function createTwoLayerPatternMasks(
       outlineMask = rotateBinaryMaskImageData(outlineMask, -residualAngle)
     }
   }
+
+  // Trim outer blank margins so repeated tiles don't introduce horizontal/vertical seam bands.
+  const fillBounds = getBinaryBounds(fillMask)
+  const outlineBounds = getBinaryBounds(outlineMask)
+  const unionBounds = {
+    minX: Math.min(fillBounds.minX, outlineBounds.minX),
+    minY: Math.min(fillBounds.minY, outlineBounds.minY),
+    maxX: Math.max(fillBounds.maxX, outlineBounds.maxX),
+    maxY: Math.max(fillBounds.maxY, outlineBounds.maxY),
+  }
+  fillMask = cropBinaryImageData(fillMask, unionBounds, 2)
+  outlineMask = cropBinaryImageData(outlineMask, unionBounds, 2)
 
   const fillPreview = imageDataToDataUrl(fillMask)
   const outlinePreview = imageDataToDataUrl(outlineMask)
@@ -1361,16 +1418,17 @@ function buildCompositeLayerPreview(layers = [], { useLayerColor = true } = {}) 
     const layerDoc = parser.parseFromString(layer.svg, 'image/svg+xml')
     const layerSvg = layerDoc.querySelector('svg')
     if (!layerSvg) return
-    layerSvg.querySelectorAll('path').forEach((sourcePath) => {
-      const node = compositeDoc.createElementNS('http://www.w3.org/2000/svg', 'path')
-      node.setAttribute('d', sourcePath.getAttribute('d') || '')
-      const paint = useLayerColor ? layer.colorHex || '#555555' : '#111111'
-      node.setAttribute('fill', paint)
-      if (sourcePath.hasAttribute('stroke')) {
-        node.setAttribute('stroke', paint)
-        node.setAttribute('stroke-width', sourcePath.getAttribute('stroke-width') || '1')
-      }
-      composite.appendChild(node)
+    const paint = useLayerColor ? layer.colorHex || '#555555' : '#111111'
+    ;[...layerSvg.children].forEach((child) => {
+      const imported = compositeDoc.importNode(child, true)
+      const paths = imported.matches?.('path') ? [imported] : [...imported.querySelectorAll?.('path')]
+      paths.forEach((path) => {
+        path.setAttribute('fill', paint)
+        if (path.hasAttribute('stroke')) {
+          path.setAttribute('stroke', paint)
+        }
+      })
+      composite.appendChild(imported)
     })
   })
 
