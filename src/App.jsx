@@ -763,6 +763,19 @@ function createPosterizedStencilLayers(
     const sortedCentroids = selected
       .slice(0, steps)
       .sort((a, b) => 0.299 * b.r + 0.587 * b.g + 0.114 * b.b - (0.299 * a.r + 0.587 * a.g + 0.114 * a.b))
+    const warmLayerIndex = warmAccentCentroid
+      ? sortedCentroids.findIndex(
+          (centroid) =>
+            rgbTripletDistance(
+              warmAccentCentroid.r,
+              warmAccentCentroid.g,
+              warmAccentCentroid.b,
+              centroid.r,
+              centroid.g,
+              centroid.b,
+            ) < 30,
+        )
+      : -1
 
     const layers = Array.from({ length: steps }, (_, index) => ({
       index,
@@ -791,12 +804,26 @@ function createPosterizedStencilLayers(
 
       let winningIndex = 0
       let winningDistance = Number.POSITIVE_INFINITY
-      for (let c = 0; c < layers.length; c += 1) {
-        const centroid = layers[c].centroid || { r: 127, g: 127, b: 127 }
-        const distance = rgbTripletDistance(r, g, b, centroid.r, centroid.g, centroid.b)
-        if (distance < winningDistance) {
-          winningDistance = distance
-          winningIndex = c
+      const hsl = rgbToHslTuple(r, g, b)
+      const isWarmPixel = hsl.h >= 10 && hsl.h <= 62 && hsl.s >= 34 && hsl.l >= 16 && hsl.l <= 88
+      let warmLocked = false
+      if (warmLayerIndex >= 0 && isWarmPixel) {
+        const warmCentroid = layers[warmLayerIndex].centroid || { r: 210, g: 140, b: 60 }
+        const warmDistance = rgbTripletDistance(r, g, b, warmCentroid.r, warmCentroid.g, warmCentroid.b)
+        if (warmDistance < 95) {
+          winningIndex = warmLayerIndex
+          warmLocked = true
+        }
+      }
+
+      if (!warmLocked) {
+        for (let c = 0; c < layers.length; c += 1) {
+          const centroid = layers[c].centroid || { r: 127, g: 127, b: 127 }
+          const distance = rgbTripletDistance(r, g, b, centroid.r, centroid.g, centroid.b)
+          if (distance < winningDistance) {
+            winningDistance = distance
+            winningIndex = c
+          }
         }
       }
 
@@ -3124,7 +3151,7 @@ function StencilStudioPanel({
   const [dragCorner, setDragCorner] = useState(null)
   const [vectorPreviewMode, setVectorPreviewMode] = useState('stacked')
   const [vectorZoom, setVectorZoom] = useState(1)
-  const vectorViewportRef = useRef(null)
+  const [vectorPan, setVectorPan] = useState({ x: 0, y: 0 })
   const vectorPanStateRef = useRef(null)
   const [isVectorPanning, setIsVectorPanning] = useState(false)
   const compositePreviewSvg = useMemo(
@@ -3168,7 +3195,7 @@ function StencilStudioPanel({
   }
 
   function handleVectorPanStart(e) {
-    if (!vectorViewportRef.current || !activeVectorSvg) return
+    if (!activeVectorSvg) return
     if (e.button !== undefined && e.button !== 0) return
     const point = getPointerPoint(e)
     if (!Number.isFinite(point?.clientX) || !Number.isFinite(point?.clientY)) return
@@ -3183,21 +3210,23 @@ function StencilStudioPanel({
     vectorPanStateRef.current = {
       x: point.clientX,
       y: point.clientY,
-      left: vectorViewportRef.current.scrollLeft,
-      top: vectorViewportRef.current.scrollTop,
+      panX: vectorPan.x,
+      panY: vectorPan.y,
     }
     setIsVectorPanning(true)
   }
 
   function handleVectorPanMove(e) {
-    if (!vectorPanStateRef.current || !vectorViewportRef.current) return
+    if (!vectorPanStateRef.current) return
     const point = getPointerPoint(e)
     if (!Number.isFinite(point?.clientX) || !Number.isFinite(point?.clientY)) return
     if (typeof e.preventDefault === 'function') e.preventDefault()
     const dx = point.clientX - vectorPanStateRef.current.x
     const dy = point.clientY - vectorPanStateRef.current.y
-    vectorViewportRef.current.scrollLeft = vectorPanStateRef.current.left - dx
-    vectorViewportRef.current.scrollTop = vectorPanStateRef.current.top - dy
+    setVectorPan({
+      x: vectorPanStateRef.current.panX + dx,
+      y: vectorPanStateRef.current.panY + dy,
+    })
   }
 
   function handleVectorPanEnd(e) {
@@ -3216,7 +3245,7 @@ function StencilStudioPanel({
     if (!isVectorPanning) return
 
     const handleWindowMove = (event) => {
-      if (!vectorPanStateRef.current || !vectorViewportRef.current) return
+      if (!vectorPanStateRef.current) return
       const point =
         event.touches && event.touches[0]
           ? event.touches[0]
@@ -3225,8 +3254,10 @@ function StencilStudioPanel({
             : event
       const dx = point.clientX - vectorPanStateRef.current.x
       const dy = point.clientY - vectorPanStateRef.current.y
-      vectorViewportRef.current.scrollLeft = vectorPanStateRef.current.left - dx
-      vectorViewportRef.current.scrollTop = vectorPanStateRef.current.top - dy
+      setVectorPan({
+        x: vectorPanStateRef.current.panX + dx,
+        y: vectorPanStateRef.current.panY + dy,
+      })
       if (typeof event.preventDefault === 'function') event.preventDefault()
     }
 
@@ -4175,7 +4206,10 @@ function StencilStudioPanel({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setVectorZoom(1)}
+                    onClick={() => {
+                      setVectorZoom(1)
+                      setVectorPan({ x: 0, y: 0 })
+                    }}
                     className="rounded px-2 py-1 text-[10px] font-semibold text-[#7f7468] hover:bg-[#f5effd]"
                     title="Reset zoom"
                   >
@@ -4200,8 +4234,7 @@ function StencilStudioPanel({
           </div>
           {activeVectorSvg ? (
             <div
-              ref={vectorViewportRef}
-              className="h-[420px] overflow-auto rounded-lg border border-[#eee5db] bg-white p-2"
+              className="h-[420px] overflow-hidden rounded-lg border border-[#eee5db] bg-white p-2"
               onPointerDown={handleVectorPanStart}
               onPointerMove={handleVectorPanMove}
               onPointerUp={handleVectorPanEnd}
@@ -4219,9 +4252,12 @@ function StencilStudioPanel({
                 <div
                   className="[&_svg]:!overflow-visible [&_svg]:h-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:w-full"
                   style={{
-                    width: `${Math.max(50, Math.round(vectorZoom * 100))}%`,
-                    height: `${Math.max(50, Math.round(vectorZoom * 100))}%`,
+                    width: '100%',
+                    height: '100%',
                     userSelect: 'none',
+                    transform: `translate(${Math.round(vectorPan.x)}px, ${Math.round(vectorPan.y)}px) scale(${vectorZoom})`,
+                    transformOrigin: 'center center',
+                    willChange: 'transform',
                   }}
                   dangerouslySetInnerHTML={{ __html: displayVectorSvg }}
                 />
