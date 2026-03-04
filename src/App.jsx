@@ -18,6 +18,13 @@ const DEFAULT_DATA = {
   colorFamilies: {},
 }
 
+const DEFAULT_RECTIFY_CORNERS = {
+  tl: { x: 0, y: 0 },
+  tr: { x: 1, y: 0 },
+  br: { x: 1, y: 1 },
+  bl: { x: 0, y: 1 },
+}
+
 function uid() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -397,11 +404,85 @@ function renderImageToCanvas(img, { maxDim = 1200, rotationDeg = 0 } = {}) {
   return { canvas, width: outWidth, height: outHeight }
 }
 
+function rectifyCanvasFromCorners(canvas, corners = DEFAULT_RECTIFY_CORNERS) {
+  const srcCtx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!srcCtx) return canvas
+  const srcWidth = canvas.width
+  const srcHeight = canvas.height
+  if (!srcWidth || !srcHeight) return canvas
+
+  const clampPoint = (point, fallback) => ({
+    x: Math.max(0, Math.min(1, Number(point?.x))),
+    y: Math.max(0, Math.min(1, Number(point?.y))),
+    ...(Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y))
+      ? null
+      : fallback),
+  })
+
+  const tlN = clampPoint(corners.tl, DEFAULT_RECTIFY_CORNERS.tl)
+  const trN = clampPoint(corners.tr, DEFAULT_RECTIFY_CORNERS.tr)
+  const brN = clampPoint(corners.br, DEFAULT_RECTIFY_CORNERS.br)
+  const blN = clampPoint(corners.bl, DEFAULT_RECTIFY_CORNERS.bl)
+
+  const toPx = (p) => ({ x: p.x * (srcWidth - 1), y: p.y * (srcHeight - 1) })
+  const tl = toPx(tlN)
+  const tr = toPx(trN)
+  const br = toPx(brN)
+  const bl = toPx(blN)
+
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
+  const outWidth = Math.max(8, Math.round((dist(tl, tr) + dist(bl, br)) * 0.5))
+  const outHeight = Math.max(8, Math.round((dist(tl, bl) + dist(tr, br)) * 0.5))
+
+  const src = srcCtx.getImageData(0, 0, srcWidth, srcHeight)
+  const outCanvas = document.createElement('canvas')
+  outCanvas.width = outWidth
+  outCanvas.height = outHeight
+  const outCtx = outCanvas.getContext('2d', { willReadFrequently: true })
+  if (!outCtx) return canvas
+  const out = outCtx.createImageData(outWidth, outHeight)
+
+  const sample = (x, y, channel) => {
+    const xi = Math.max(0, Math.min(srcWidth - 1, Math.round(x)))
+    const yi = Math.max(0, Math.min(srcHeight - 1, Math.round(y)))
+    return src.data[(yi * srcWidth + xi) * 4 + channel]
+  }
+
+  for (let y = 0; y < outHeight; y += 1) {
+    const v = outHeight > 1 ? y / (outHeight - 1) : 0
+    for (let x = 0; x < outWidth; x += 1) {
+      const u = outWidth > 1 ? x / (outWidth - 1) : 0
+      const sx =
+        (1 - u) * (1 - v) * tl.x + u * (1 - v) * tr.x + u * v * br.x + (1 - u) * v * bl.x
+      const sy =
+        (1 - u) * (1 - v) * tl.y + u * (1 - v) * tr.y + u * v * br.y + (1 - u) * v * bl.y
+      const idx = (y * outWidth + x) * 4
+      out.data[idx] = sample(sx, sy, 0)
+      out.data[idx + 1] = sample(sx, sy, 1)
+      out.data[idx + 2] = sample(sx, sy, 2)
+      out.data[idx + 3] = 255
+    }
+  }
+
+  outCtx.putImageData(out, 0, 0)
+  return outCanvas
+}
+
 function createStencilImageData(
   img,
-  { threshold = 140, invert = false, detail = 6, rotationDeg = 0 } = {},
+  {
+    threshold = 140,
+    invert = false,
+    detail = 6,
+    rotationDeg = 0,
+    rectifyEnabled = false,
+    rectifyCorners = DEFAULT_RECTIFY_CORNERS,
+  } = {},
 ) {
-  const { canvas, width, height } = renderImageToCanvas(img, { maxDim: 1200, rotationDeg })
+  const rendered = renderImageToCanvas(img, { maxDim: 1200, rotationDeg })
+  const canvas = rectifyEnabled ? rectifyCanvasFromCorners(rendered.canvas, rectifyCorners) : rendered.canvas
+  const width = canvas.width
+  const height = canvas.height
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) throw new Error('Could not create canvas context.')
   const imageData = ctx.getImageData(0, 0, width, height)
@@ -444,9 +525,19 @@ function createStencilImageData(
 
 function createPosterizedStencilLayers(
   img,
-  { layerCount = 3, invert = false, detail = 6, rotationDeg = 0 } = {},
+  {
+    layerCount = 3,
+    invert = false,
+    detail = 6,
+    rotationDeg = 0,
+    rectifyEnabled = false,
+    rectifyCorners = DEFAULT_RECTIFY_CORNERS,
+  } = {},
 ) {
-  const { canvas, width, height } = renderImageToCanvas(img, { maxDim: 1200, rotationDeg })
+  const rendered = renderImageToCanvas(img, { maxDim: 1200, rotationDeg })
+  const canvas = rectifyEnabled ? rectifyCanvasFromCorners(rendered.canvas, rectifyCorners) : rendered.canvas
+  const width = canvas.width
+  const height = canvas.height
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) throw new Error('Could not create canvas context.')
 
@@ -598,11 +689,16 @@ function createTwoLayerPatternMasks(
     detail = 6,
     invert = false,
     rotationDeg = 0,
+    rectifyEnabled = false,
+    rectifyCorners = DEFAULT_RECTIFY_CORNERS,
     outlineSource = 'fromFill',
     outlineWidth = 2,
   } = {},
 ) {
-  const { canvas, width, height } = renderImageToCanvas(img, { maxDim: 1400, rotationDeg })
+  const rendered = renderImageToCanvas(img, { maxDim: 1400, rotationDeg })
+  const canvas = rectifyEnabled ? rectifyCanvasFromCorners(rendered.canvas, rectifyCorners) : rendered.canvas
+  const width = canvas.width
+  const height = canvas.height
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) throw new Error('Could not create canvas context.')
 
@@ -1285,6 +1381,10 @@ function loadStencilLibrary() {
         mode: String(entry?.mode || 'pattern'),
         createdAt: String(entry?.createdAt || new Date().toISOString()),
         settings: entry?.settings && typeof entry.settings === 'object' ? entry.settings : {},
+        rectifyEnabled: Boolean(entry?.rectifyEnabled),
+        rectifyCorners: entry?.rectifyCorners && typeof entry.rectifyCorners === 'object'
+          ? entry.rectifyCorners
+          : DEFAULT_RECTIFY_CORNERS,
         sourcePreviewUrl: String(entry?.sourcePreviewUrl || ''),
         processedPreviewUrl: String(entry?.processedPreviewUrl || ''),
         svg: String(entry?.svg || ''),
@@ -2140,6 +2240,8 @@ function StencilStudioPanel({
   stencilLibrary,
   stencilSettings,
   stencilStraightenAngle,
+  stencilRectifyEnabled,
+  stencilRectifyCorners,
   stencilBusy,
   stencilError,
   onImageChange,
@@ -2150,8 +2252,12 @@ function StencilStudioPanel({
   onSaveToLibrary,
   onLoadFromLibrary,
   onDeleteFromLibrary,
+  onToggleRectify,
+  onUpdateRectifyCorner,
+  onResetRectifyCorners,
 }) {
   const [isDragActive, setIsDragActive] = useState(false)
+  const [dragCorner, setDragCorner] = useState(null)
   const [vectorPreviewMode, setVectorPreviewMode] = useState('current')
   const compositePreviewSvg = useMemo(() => buildCompositeLayerPreview(stencilLayers), [stencilLayers])
   const activeVectorSvg =
@@ -2188,6 +2294,15 @@ function StencilStudioPanel({
     if (file && file.type.startsWith('image/')) {
       onImageChange(file)
     }
+  }
+
+  function handleCornerDrag(e) {
+    if (!dragCorner) return
+    const bounds = e.currentTarget.getBoundingClientRect()
+    if (!bounds.width || !bounds.height) return
+    const x = (e.clientX - bounds.left) / bounds.width
+    const y = (e.clientY - bounds.top) / bounds.height
+    onUpdateRectifyCorner(dragCorner, { x, y })
   }
 
   return (
@@ -2279,6 +2394,27 @@ function StencilStudioPanel({
                     {stencilStraightenAngle.toFixed(1)}°
                   </p>
                 ) : null}
+                <div className="mt-2 flex items-center gap-2">
+                  <label className="flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
+                    <input
+                      type="checkbox"
+                      checked={stencilRectifyEnabled}
+                      onChange={(e) => onToggleRectify(e.target.checked)}
+                      className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
+                    />
+                    Manual 4-corner rectify
+                    <HelpTip text="Drag the 4 corner points on the preview to align the pattern area before tracing." />
+                  </label>
+                  {stencilRectifyEnabled ? (
+                    <button
+                      type="button"
+                      onClick={onResetRectifyCorners}
+                      className="rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-2 py-1 text-[11px] font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
+                    >
+                      Reset
+                    </button>
+                  ) : null}
+                </div>
               </div>
 
               <div>
@@ -2566,11 +2702,47 @@ function StencilStudioPanel({
             <div className="rounded-xl border border-[#d7c7ee] bg-[#fcf9ff] p-4">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Preview</p>
               {stencilImagePreviewUrl ? (
-                <img
-                  src={stencilImagePreviewUrl}
-                  alt="Stencil source"
-                  className="h-[280px] w-full rounded-lg border border-[#eee5db] object-contain bg-white"
-                />
+                <div
+                  className="relative h-[280px] w-full overflow-hidden rounded-lg border border-[#eee5db] bg-white"
+                  onMouseMove={handleCornerDrag}
+                  onMouseUp={() => setDragCorner(null)}
+                  onMouseLeave={() => setDragCorner(null)}
+                >
+                  <img
+                    src={stencilImagePreviewUrl}
+                    alt="Stencil source"
+                    className="h-full w-full object-contain"
+                  />
+                  {stencilRectifyEnabled ? (
+                    <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+                      <polygon
+                        points={`${stencilRectifyCorners.tl.x * 100},${stencilRectifyCorners.tl.y * 100} ${stencilRectifyCorners.tr.x * 100},${stencilRectifyCorners.tr.y * 100} ${stencilRectifyCorners.br.x * 100},${stencilRectifyCorners.br.y * 100} ${stencilRectifyCorners.bl.x * 100},${stencilRectifyCorners.bl.y * 100}`}
+                        fill="rgba(165,139,196,0.12)"
+                        stroke="#8f79b3"
+                        strokeWidth="0.7"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    </svg>
+                  ) : null}
+                  {stencilRectifyEnabled
+                    ? ['tl', 'tr', 'br', 'bl'].map((key) => {
+                        const point = stencilRectifyCorners[key]
+                        return (
+                          <button
+                            key={`corner-${key}`}
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault()
+                              setDragCorner(key)
+                            }}
+                            className="absolute h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-[#9678b8] shadow"
+                            style={{ left: `${point.x * 100}%`, top: `${point.y * 100}%` }}
+                            title={`Drag ${key.toUpperCase()} corner`}
+                          />
+                        )
+                      })
+                    : null}
+                </div>
               ) : (
                 <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed border-[#ddd0c1] bg-[#faf7f4] text-sm text-[#8b7b6b]">
                   Upload an image to start.
@@ -2939,6 +3111,8 @@ function App() {
   const [stencilBusy, setStencilBusy] = useState(false)
   const [stencilError, setStencilError] = useState('')
   const [stencilStraightenAngle, setStencilStraightenAngle] = useState(0)
+  const [stencilRectifyEnabled, setStencilRectifyEnabled] = useState(false)
+  const [stencilRectifyCorners, setStencilRectifyCorners] = useState(DEFAULT_RECTIFY_CORNERS)
   const [stencilSettings, setStencilSettings] = useState({
     mode: 'multi',
     threshold: 140,
@@ -3404,6 +3578,7 @@ function App() {
     setStencilImageFile(file || null)
     setStencilSourceDataUrl('')
     setStencilStraightenAngle(0)
+    setStencilRectifyCorners(DEFAULT_RECTIFY_CORNERS)
     setStencilSvg('')
     setStencilLayers([])
     setStencilProcessedPreviewUrl('')
@@ -3433,6 +3608,18 @@ function App() {
     setStencilProcessedPreviewUrl('')
   }
 
+  function updateStencilRectifyCorner(key, point) {
+    const safePoint = {
+      x: Math.max(0, Math.min(1, Number(point?.x))),
+      y: Math.max(0, Math.min(1, Number(point?.y))),
+    }
+    setStencilRectifyCorners((prev) => ({ ...prev, [key]: safePoint }))
+  }
+
+  function resetStencilRectifyCorners() {
+    setStencilRectifyCorners(DEFAULT_RECTIFY_CORNERS)
+  }
+
   async function generateStencilFromImage() {
     if (!stencilImageFile) {
       setStencilError('Choose an image first.')
@@ -3448,7 +3635,12 @@ function App() {
       const rotationDeg = autoRotationDeg + Number(stencilSettings.straightenAdjust || 0)
       setStencilStraightenAngle(rotationDeg)
       if (stencilSettings.mode === 'pattern') {
-        const pairLayers = createTwoLayerPatternMasks(image, { ...stencilSettings, rotationDeg })
+        const pairLayers = createTwoLayerPatternMasks(image, {
+          ...stencilSettings,
+          rotationDeg,
+          rectifyEnabled: stencilRectifyEnabled,
+          rectifyCorners: stencilRectifyCorners,
+        })
         const layerSvgs = pairLayers.map((layer) => {
           const rawSvg = buildStencilSvg(layer.imageData, { ...stencilSettings, noiseFilter: 1 })
           const svg = wrapSvgForStencilCanvas(rawSvg, {
@@ -3476,7 +3668,12 @@ function App() {
         setStencilSvg(layerSvgs[0]?.svg || '')
         setStencilLayers(layerSvgs)
       } else if (stencilSettings.mode === 'multi') {
-        const posterizedLayers = createPosterizedStencilLayers(image, { ...stencilSettings, rotationDeg })
+        const posterizedLayers = createPosterizedStencilLayers(image, {
+          ...stencilSettings,
+          rotationDeg,
+          rectifyEnabled: stencilRectifyEnabled,
+          rectifyCorners: stencilRectifyCorners,
+        })
         const layerSvgs = posterizedLayers.map((layer) => {
           const rawSvg = buildStencilSvg(layer.imageData, stencilSettings)
           const svg = wrapSvgForStencilCanvas(rawSvg, {
@@ -3499,7 +3696,12 @@ function App() {
         setStencilSvg(layerSvgs[0]?.svg || '')
         setStencilLayers(layerSvgs)
       } else {
-        const processed = createStencilImageData(image, { ...stencilSettings, rotationDeg })
+        const processed = createStencilImageData(image, {
+          ...stencilSettings,
+          rotationDeg,
+          rectifyEnabled: stencilRectifyEnabled,
+          rectifyCorners: stencilRectifyCorners,
+        })
         const rawSvg = buildStencilSvg(processed.imageData, stencilSettings)
         const svg = wrapSvgForStencilCanvas(rawSvg, {
           paperSize: stencilSettings.paperSize,
@@ -3566,6 +3768,8 @@ function App() {
       mode: stencilSettings.mode,
       createdAt: new Date().toISOString(),
       settings: stencilSettings,
+      rectifyEnabled: stencilRectifyEnabled,
+      rectifyCorners: stencilRectifyCorners,
       sourcePreviewUrl: stencilSourceDataUrl || '',
       processedPreviewUrl: stencilProcessedPreviewUrl || '',
       svg: stencilSvg || '',
@@ -3588,7 +3792,35 @@ function App() {
     if (stencilImagePreviewUrl && stencilImagePreviewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(stencilImagePreviewUrl)
     }
+    const safe01 = (value, fallback = 0) => {
+      const n = Number(value)
+      if (!Number.isFinite(n)) return fallback
+      return Math.max(0, Math.min(1, n))
+    }
     setStencilSettings((prev) => ({ ...prev, ...entry.settings }))
+    setStencilRectifyEnabled(Boolean(entry.rectifyEnabled))
+    setStencilRectifyCorners(
+      entry.rectifyCorners && typeof entry.rectifyCorners === 'object'
+        ? {
+            tl: {
+              x: safe01(entry.rectifyCorners?.tl?.x, 0),
+              y: safe01(entry.rectifyCorners?.tl?.y, 0),
+            },
+            tr: {
+              x: safe01(entry.rectifyCorners?.tr?.x, 1),
+              y: safe01(entry.rectifyCorners?.tr?.y, 0),
+            },
+            br: {
+              x: safe01(entry.rectifyCorners?.br?.x, 1),
+              y: safe01(entry.rectifyCorners?.br?.y, 1),
+            },
+            bl: {
+              x: safe01(entry.rectifyCorners?.bl?.x, 0),
+              y: safe01(entry.rectifyCorners?.bl?.y, 1),
+            },
+          }
+        : DEFAULT_RECTIFY_CORNERS,
+    )
     setStencilImageFile(null)
     setStencilSourceDataUrl(entry.sourcePreviewUrl || '')
     setStencilImagePreviewUrl(entry.sourcePreviewUrl || '')
@@ -4610,6 +4842,8 @@ function App() {
           stencilLibrary={stencilLibrary}
           stencilSettings={stencilSettings}
           stencilStraightenAngle={stencilStraightenAngle}
+          stencilRectifyEnabled={stencilRectifyEnabled}
+          stencilRectifyCorners={stencilRectifyCorners}
           stencilBusy={stencilBusy}
           stencilError={stencilError}
           onImageChange={(file) => void handleStencilImageFileChange(file)}
@@ -4620,6 +4854,9 @@ function App() {
           onSaveToLibrary={saveStencilToLibrary}
           onLoadFromLibrary={loadStencilFromLibrary}
           onDeleteFromLibrary={deleteStencilFromLibrary}
+          onToggleRectify={setStencilRectifyEnabled}
+          onUpdateRectifyCorner={updateStencilRectifyCorner}
+          onResetRectifyCorners={resetStencilRectifyCorners}
         />
       )}
 
