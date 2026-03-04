@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ImageTracer from 'imagetracerjs'
 import { supabase, supabaseConfigured } from './lib/supabase'
 
@@ -645,6 +645,32 @@ function createPosterizedStencilLayers(
       return false
     }
 
+    const warmAccent = { r: 0, g: 0, b: 0, weight: 0, count: 0 }
+    for (let i = 0; i < source.data.length; i += 4) {
+      const r = source.data[i]
+      const g = source.data[i + 1]
+      const b = source.data[i + 2]
+      const a = source.data[i + 3]
+      if (isLikelyBackgroundPixel(r, g, b, a)) continue
+      const { h, s, l } = rgbToHslTuple(r, g, b)
+      const isWarm = h >= 12 && h <= 58
+      if (!isWarm || s < 32 || l < 18 || l > 86) continue
+      const weight = 1 + s / 100
+      warmAccent.r += r * weight
+      warmAccent.g += g * weight
+      warmAccent.b += b * weight
+      warmAccent.weight += weight
+      warmAccent.count += 1
+    }
+    const warmAccentCentroid =
+      warmAccent.weight > 0 && warmAccent.count > Math.max(18, Math.floor((width * height) / 18000))
+        ? {
+            r: warmAccent.r / warmAccent.weight,
+            g: warmAccent.g / warmAccent.weight,
+            b: warmAccent.b / warmAccent.weight,
+          }
+        : null
+
     const sampleStride = Math.max(4, (11 - Math.max(1, Math.min(10, detail))) * 3)
     const bucketSize = detail >= 8 ? 12 : detail >= 6 ? 14 : 18
     const buckets = new Map()
@@ -708,6 +734,30 @@ function createPosterizedStencilLayers(
     while (selected.length < steps) {
       const fallback = selected[selected.length - 1] || { r: 127, g: 127, b: 127 }
       selected.push({ ...fallback, count: 1 })
+    }
+
+    if (warmAccentCentroid) {
+      const minWarmDistance = selected.length
+        ? Math.min(
+            ...selected.map((picked) =>
+              rgbTripletDistance(
+                warmAccentCentroid.r,
+                warmAccentCentroid.g,
+                warmAccentCentroid.b,
+                picked.r,
+                picked.g,
+                picked.b,
+              ),
+            ),
+          )
+        : Number.POSITIVE_INFINITY
+      if (minWarmDistance > 24) {
+        selected[selected.length - 1] = {
+          ...warmAccentCentroid,
+          count: Math.max(1, warmAccent.count),
+          score: Number.POSITIVE_INFINITY,
+        }
+      }
     }
 
     const sortedCentroids = selected
@@ -3074,6 +3124,8 @@ function StencilStudioPanel({
   const [dragCorner, setDragCorner] = useState(null)
   const [vectorPreviewMode, setVectorPreviewMode] = useState('stacked')
   const [vectorZoom, setVectorZoom] = useState(1)
+  const vectorViewportRef = useRef(null)
+  const [vectorPanState, setVectorPanState] = useState(null)
   const compositePreviewSvg = useMemo(
     () => buildCompositeLayerPreview(stencilLayers, { useLayerColor: true }),
     [stencilLayers],
@@ -3108,6 +3160,28 @@ function StencilStudioPanel({
       ? 'Download Plate SVG'
       : 'Download Elements SVG'
   const vectorZoomLabel = `${Math.round(vectorZoom * 100)}%`
+
+  function handleVectorPanStart(e) {
+    if (!vectorViewportRef.current || !activeVectorSvg) return
+    setVectorPanState({
+      x: e.clientX,
+      y: e.clientY,
+      left: vectorViewportRef.current.scrollLeft,
+      top: vectorViewportRef.current.scrollTop,
+    })
+  }
+
+  function handleVectorPanMove(e) {
+    if (!vectorPanState || !vectorViewportRef.current) return
+    const dx = e.clientX - vectorPanState.x
+    const dy = e.clientY - vectorPanState.y
+    vectorViewportRef.current.scrollLeft = vectorPanState.left - dx
+    vectorViewportRef.current.scrollTop = vectorPanState.top - dy
+  }
+
+  function handleVectorPanEnd() {
+    if (vectorPanState) setVectorPanState(null)
+  }
 
   function HelpTip({ text }) {
     const [open, setOpen] = useState(false)
@@ -4061,7 +4135,13 @@ function StencilStudioPanel({
           </div>
           {activeVectorSvg ? (
             <div
+              ref={vectorViewportRef}
               className="h-[420px] overflow-auto rounded-lg border border-[#eee5db] bg-white p-2"
+              onMouseDown={handleVectorPanStart}
+              onMouseMove={handleVectorPanMove}
+              onMouseUp={handleVectorPanEnd}
+              onMouseLeave={handleVectorPanEnd}
+              style={{ cursor: vectorPanState ? 'grabbing' : 'grab' }}
             >
               <div className="flex h-full min-h-full w-full min-w-full items-center justify-center overflow-visible">
                 <div
@@ -4069,6 +4149,7 @@ function StencilStudioPanel({
                   style={{
                     width: `${Math.max(50, Math.round(vectorZoom * 100))}%`,
                     height: `${Math.max(50, Math.round(vectorZoom * 100))}%`,
+                    userSelect: 'none',
                   }}
                   dangerouslySetInnerHTML={{ __html: displayVectorSvg }}
                 />
