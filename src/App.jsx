@@ -2232,7 +2232,7 @@ function buildPlatePath({ minX = 0, minY = 0, width, height, shape = 'rectangle'
 
 function buildPlateCutSvg(
   layerSvg,
-  { shape = 'rectangle', margin = 0.08 } = {},
+  { shape = 'rectangle', margin = 0.08, fillColor = '#111111' } = {},
 ) {
   const parser = new DOMParser()
   const parsed = parser.parseFromString(layerSvg, 'image/svg+xml')
@@ -2285,7 +2285,7 @@ function buildPlateCutSvg(
   const platePath = buildPlatePath({ minX, minY, width, height, shape, margin })
   const plate = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'path')
   plate.setAttribute('d', platePath)
-  plate.setAttribute('fill', '#111111')
+  plate.setAttribute('fill', normalizeHex(fillColor) || '#111111')
   plate.setAttribute('mask', `url(#${maskId})`)
   outputSvg.appendChild(plate)
   return new XMLSerializer().serializeToString(outputSvg)
@@ -4475,7 +4475,7 @@ function StencilStudioPanel({
               <button
                 type="button"
                 onClick={() => {
-                  stencilLayers.forEach((layer) => onDownloadLayerSvg(layer.index))
+                  stencilLayers.forEach((layer, orderIndex) => onDownloadLayerSvg(layer, orderIndex + 1))
                 }}
                 className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd]"
               >
@@ -4483,7 +4483,7 @@ function StencilStudioPanel({
               </button>
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {stencilLayers.map((layer) => (
+              {stencilLayers.map((layer, orderIndex) => (
                 <div key={`stencil-layer-${layer.index}`} className="rounded-lg border border-[#eee5db] p-3">
                   <p className="text-sm font-medium text-[#5c4a3d]">{layer.name || `Layer ${layer.index + 1}`}</p>
                   <p className="mb-2 text-xs text-[#8b7b6b]">{layer.hint || `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`}</p>
@@ -4512,10 +4512,10 @@ function StencilStudioPanel({
                   </div>
                   <button
                     type="button"
-                    onClick={() => onDownloadLayerSvg(layer.index)}
+                    onClick={() => onDownloadLayerSvg(layer, orderIndex + 1)}
                     className="w-full rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
                   >
-                    {isAutoGenerator ? layerDownloadLabel : 'Download Layer SVG'}
+                    {isAutoGenerator || isTraceGenerator ? layerDownloadLabel : 'Download Layer SVG'}
                   </button>
                 </div>
               ))}
@@ -5486,10 +5486,18 @@ function App() {
     URL.revokeObjectURL(url)
   }
 
-  function downloadStencilLayerSvg(layerIndex) {
-    const layer = stencilLayers.find((entry) => entry.index === layerIndex)
+  function downloadStencilLayerSvg(layerInput, layerNumberOverride = null) {
+    const layer =
+      layerInput && typeof layerInput === 'object'
+        ? layerInput
+        : stencilLayers.find((entry) => entry.index === layerInput)
     if (!layer?.svg) return
-    const layerNumber = layerIndex + 1
+    const resolvedIndex = stencilLayers.findIndex((entry) => entry.index === layer.index)
+    const layerNumber = Number.isFinite(Number(layerNumberOverride))
+      ? Number(layerNumberOverride)
+      : resolvedIndex >= 0
+        ? resolvedIndex + 1
+        : Number(layer.index) + 1
     const parts = []
     const mode = stencilSettings.exportContent || 'elements'
     if (mode === 'elements' || mode === 'both') {
@@ -5505,6 +5513,7 @@ function App() {
         svg: buildPlateCutSvg(layer.svg, {
           shape: stencilSettings.plateShape || 'rectangle',
           margin: stencilSettings.plateMargin ?? 0.08,
+          fillColor: layer.colorHex || '#111111',
         }),
         fileName: `Stencil Plate ${layerNumber}.svg`,
       })
