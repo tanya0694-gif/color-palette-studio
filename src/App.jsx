@@ -548,6 +548,28 @@ function createPosterizedStencilLayers(
 
   const source = ctx.getImageData(0, 0, width, height)
   const steps = Math.max(2, Math.min(10, Math.round(layerCount)))
+
+  const cropLayersToUnionContent = (rawLayers) => {
+    if (!rawLayers.length) return rawLayers
+    const boundsList = rawLayers.map((layer) => getBinaryBounds(layer.imageData))
+    const nonEmpty = boundsList.filter((bounds) => !bounds.empty)
+    if (!nonEmpty.length) return rawLayers
+    const unionBounds = {
+      minX: Math.min(...nonEmpty.map((bounds) => bounds.minX)),
+      minY: Math.min(...nonEmpty.map((bounds) => bounds.minY)),
+      maxX: Math.max(...nonEmpty.map((bounds) => bounds.maxX)),
+      maxY: Math.max(...nonEmpty.map((bounds) => bounds.maxY)),
+    }
+    return rawLayers.map((layer) => {
+      const cropped = cropBinaryImageData(layer.imageData, unionBounds, 4)
+      return {
+        ...layer,
+        imageData: cropped,
+        previewUrl: imageDataToDataUrl(cropped),
+      }
+    })
+  }
+
   if (colorSegmentation) {
     const sampleStride = Math.max(4, (11 - Math.max(1, Math.min(10, detail))) * 3)
     const bucketSize = detail >= 8 ? 12 : detail >= 6 ? 14 : 18
@@ -665,7 +687,7 @@ function createPosterizedStencilLayers(
     }
 
     const minPixels = Math.max(40, Math.floor((width * height) / 1200))
-    return layers.map((layer) => {
+    const generated = layers.map((layer) => {
       if (layer.colorStats.count < minPixels) {
         for (let i = 0; i < layer.imageData.data.length; i += 4) {
           layer.imageData.data[i] = 255
@@ -674,7 +696,6 @@ function createPosterizedStencilLayers(
           layer.imageData.data[i + 3] = 255
         }
       }
-      ctx.putImageData(layer.imageData, 0, 0)
       const layerColor = safeAverageColor(
         layer.colorStats,
         rgbToHex(layer.centroid?.r || 127, layer.centroid?.g || 127, layer.centroid?.b || 127),
@@ -684,11 +705,12 @@ function createPosterizedStencilLayers(
         cutoffLow: layer.cutoffLow,
         cutoffHigh: layer.cutoffHigh,
         imageData: layer.imageData,
-        previewUrl: canvas.toDataURL('image/png'),
+        previewUrl: '',
         colorHex: layerColor,
         hint: `Color cluster ${layer.index + 1}`,
       }
     })
+    return cropLayersToUnionContent(generated)
   }
 
   const quantizeStep = Math.max(1, Math.round((11 - Math.max(1, Math.min(10, detail))) * 2))
@@ -733,18 +755,18 @@ function createPosterizedStencilLayers(
     }
   }
 
-  return layers.map((layer) => {
-    ctx.putImageData(layer.imageData, 0, 0)
+  const generated = layers.map((layer) => {
     return {
       index: layer.index,
       cutoffLow: layer.cutoffLow,
       cutoffHigh: layer.cutoffHigh,
       imageData: layer.imageData,
-      previewUrl: canvas.toDataURL('image/png'),
+      previewUrl: '',
       colorHex: safeAverageColor(layer.colorStats, '#7E86C2'),
       hint: `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`,
     }
   })
+  return cropLayersToUnionContent(generated)
 }
 
 function percentile(values, ratio) {
