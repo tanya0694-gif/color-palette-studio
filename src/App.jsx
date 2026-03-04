@@ -2911,6 +2911,21 @@ function StencilStudioPanel({
     onUpdateRectifyCorner(dragCorner, { x, y })
   }
 
+  async function pickSplitColor(field) {
+    if (!window.EyeDropper) {
+      window.alert('Eyedropper is not supported in this browser. Use the color box instead.')
+      return
+    }
+    try {
+      const eyeDropper = new window.EyeDropper()
+      const result = await eyeDropper.open()
+      const picked = normalizeHex(result?.sRGBHex)
+      if (picked) onUpdateSetting(field, picked)
+    } catch {
+      // User canceled eyedropper; no action needed.
+    }
+  }
+
   return (
     <main className="flex-1 w-full max-w-7xl self-center overflow-auto px-4 py-4 md:px-6 md:py-6">
       <section className="rounded-2xl border border-[#d7c7ee] bg-[#f2ecfb] p-4 shadow-sm md:rounded-3xl md:p-6">
@@ -3203,7 +3218,9 @@ function StencilStudioPanel({
                 </div>
               </div>
 
-              {useImageGenerator && stencilSettings.mode === 'pattern' ? (
+              {useImageGenerator &&
+              stencilSettings.mode === 'pattern' &&
+              stencilSettings.outlineSource !== 'colorSplit' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Repeat Style</span>
@@ -3236,7 +3253,9 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {useImageGenerator && stencilSettings.mode === 'pattern' ? (
+              {useImageGenerator &&
+              stencilSettings.mode === 'pattern' &&
+              stencilSettings.outlineSource !== 'colorSplit' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Outline Source</span>
@@ -3309,6 +3328,13 @@ function StencilStudioPanel({
                       className="mt-1 h-8 w-full rounded border border-[#d9cfc4] bg-white"
                     />
                   </label>
+                  <button
+                    type="button"
+                    onClick={() => pickSplitColor('splitColorA')}
+                    className="w-full rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f6f0ff]"
+                  >
+                    Pick Layer 1 Color From Screen
+                  </button>
                   <label className="block text-xs font-medium text-[#6b5b4f]">
                     Layer 2 Color (Light)
                     <input
@@ -3318,6 +3344,13 @@ function StencilStudioPanel({
                       className="mt-1 h-8 w-full rounded border border-[#d9cfc4] bg-white"
                     />
                   </label>
+                  <button
+                    type="button"
+                    onClick={() => pickSplitColor('splitColorB')}
+                    className="w-full rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f6f0ff]"
+                  >
+                    Pick Layer 2 Color From Screen
+                  </button>
                   <div>
                     <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                       <span>Tolerance ({stencilSettings.splitTolerance})</span>
@@ -4534,13 +4567,14 @@ function App() {
                 rectifyCorners: stencilRectifyCorners,
               })
         const layerSvgs = pairLayers.map((layer) => {
+          const isColorSplit = stencilSettings.outlineSource === 'colorSplit'
           const rawSvg = buildStencilSvg(layer.imageData, { ...stencilSettings, noiseFilter: 1 })
           const svg = wrapSvgForStencilCanvas(rawSvg, {
             paperSize: stencilSettings.paperSize,
             orientation: stencilSettings.orientation,
-            mode: 'pattern',
-            tileScale: stencilSettings.tileScale / 100,
-            repeatStyle: stencilSettings.repeatStyle,
+            mode: isColorSplit ? 'multi' : 'pattern',
+            tileScale: isColorSplit ? 1 : stencilSettings.tileScale / 100,
+            repeatStyle: isColorSplit ? 'direct' : stencilSettings.repeatStyle,
           })
           return {
             index: layer.index,
