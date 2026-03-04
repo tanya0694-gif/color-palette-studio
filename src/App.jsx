@@ -1716,6 +1716,55 @@ function buildCompositeLayerPreview(layers = [], { useLayerColor = true } = {}) 
   return new XMLSerializer().serializeToString(composite)
 }
 
+function buildPlatePath({ width, height, shape = 'rectangle', margin = 0.08 }) {
+  const safeMargin = Math.max(0, Math.min(0.35, Number(margin) || 0))
+  const insetX = width * safeMargin
+  const insetY = height * safeMargin
+  const x = insetX
+  const y = insetY
+  const w = Math.max(1, width - insetX * 2)
+  const h = Math.max(1, height - insetY * 2)
+
+  if (shape === 'circle') {
+    const cx = width / 2
+    const cy = height / 2
+    const r = Math.max(1, Math.min(w, h) / 2)
+    return `M ${cx - r} ${cy} A ${r} ${r} 0 1 0 ${cx + r} ${cy} A ${r} ${r} 0 1 0 ${cx - r} ${cy} Z`
+  }
+  if (shape === 'square') {
+    const s = Math.max(1, Math.min(w, h))
+    const sx = (width - s) / 2
+    const sy = (height - s) / 2
+    return `M ${sx} ${sy} H ${sx + s} V ${sy + s} H ${sx} Z`
+  }
+  return `M ${x} ${y} H ${x + w} V ${y + h} H ${x} Z`
+}
+
+function buildPlateCutSvg(
+  layerSvg,
+  { shape = 'rectangle', margin = 0.08 } = {},
+) {
+  const parser = new DOMParser()
+  const parsed = parser.parseFromString(layerSvg, 'image/svg+xml')
+  const sourceSvg = parsed.querySelector('svg')
+  if (!sourceSvg) return layerSvg
+  const { width, height } = getSvgViewBoxSize(sourceSvg)
+  const paths = [...sourceSvg.querySelectorAll('path')]
+  if (!paths.length) return layerSvg
+  const outputDoc = document.implementation.createDocument('http://www.w3.org/2000/svg', 'svg', null)
+  const outputSvg = outputDoc.documentElement
+  outputSvg.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+  outputSvg.setAttribute('viewBox', `0 0 ${width} ${height}`)
+  const platePath = buildPlatePath({ width, height, shape, margin })
+  const holes = paths.map((path) => path.getAttribute('d') || '').filter(Boolean).join(' ')
+  const combined = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'path')
+  combined.setAttribute('d', `${platePath} ${holes}`.trim())
+  combined.setAttribute('fill', '#111111')
+  combined.setAttribute('fill-rule', 'evenodd')
+  outputSvg.appendChild(combined)
+  return new XMLSerializer().serializeToString(outputSvg)
+}
+
 function normalizePalette(raw, fallbackCollection = '') {
   if (!raw || typeof raw !== 'object') return null
   const collection = String(raw.collection || fallbackCollection || '').trim()
@@ -2867,7 +2916,11 @@ function StencilStudioPanel({
     vectorPreviewMode === 'stacked'
       ? compositePreviewSvg || stencilSvg
       : cutPreviewSvg || stencilSvg || compositePreviewSvg
-  const useImageGenerator = stencilSettings.generatorType !== 'preset'
+  const normalizedGenerator =
+    stencilSettings.generatorType === 'image' ? 'auto' : stencilSettings.generatorType || 'auto'
+  const useImageGenerator = normalizedGenerator !== 'preset'
+  const isLegacyGenerator = normalizedGenerator === 'legacy'
+  const isAutoGenerator = normalizedGenerator === 'auto'
 
   function HelpTip({ text }) {
     const [open, setOpen] = useState(false)
@@ -2933,8 +2986,10 @@ function StencilStudioPanel({
           <div className="min-w-0">
             <h2 className="font-display text-2xl font-semibold text-[#3f3254] md:text-3xl">Stencil Studio</h2>
             <p className="text-sm text-[#7f7468]">
-              {useImageGenerator
-                ? 'Upload an image, tune controls, and export Cricut-ready SVG vectors.'
+              {isAutoGenerator
+                ? 'Upload an image and auto-generate separated stencil layers for Cricut.'
+                : isLegacyGenerator
+                ? 'Legacy image tracing controls (advanced/tuning mode).'
                 : 'Use geometric presets for clean two-layer lattice stencils.'}
             </p>
           </div>
@@ -2976,9 +3031,20 @@ function StencilStudioPanel({
                 <div className="inline-flex rounded-lg border-2 border-[#cab6ea] bg-[#efe6fb] p-1 shadow-sm">
                   <button
                     type="button"
+                    onClick={() => onUpdateSetting('generatorType', 'auto')}
+                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
+                      isAutoGenerator
+                        ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
+                        : 'text-[#5f5276] hover:bg-white'
+                    }`}
+                  >
+                    Auto Stencil Layers
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => onUpdateSetting('generatorType', 'preset')}
                     className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
-                      stencilSettings.generatorType === 'preset'
+                      normalizedGenerator === 'preset'
                         ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
                         : 'text-[#5f5276] hover:bg-white'
                     }`}
@@ -2987,14 +3053,14 @@ function StencilStudioPanel({
                   </button>
                   <button
                     type="button"
-                    onClick={() => onUpdateSetting('generatorType', 'image')}
+                    onClick={() => onUpdateSetting('generatorType', 'legacy')}
                     className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
-                      useImageGenerator
+                      isLegacyGenerator
                         ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
                         : 'text-[#5f5276] hover:bg-white'
                     }`}
                   >
-                    Image Stencil
+                    Legacy Image
                   </button>
                 </div>
               </div>
@@ -3078,7 +3144,7 @@ function StencilStudioPanel({
                 )}
               </div>
 
-              {useImageGenerator ? (
+              {isLegacyGenerator ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Straighten Adjust ({Number(stencilSettings.straightenAdjust || 0).toFixed(1)}°)</span>
@@ -3096,7 +3162,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {useImageGenerator ? (
+              {isLegacyGenerator ? (
                 <div>
                   <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     Output Mode
@@ -3218,7 +3284,112 @@ function StencilStudioPanel({
                 </div>
               </div>
 
-              {useImageGenerator &&
+              {isAutoGenerator ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Export Mode</span>
+                    <HelpTip text="Elements exports only traced shapes. Stencil Plate exports a shape with cutouts already punched. Both exports both files." />
+                  </div>
+                  <div className="inline-flex rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-1">
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('exportContent', 'elements')}
+                      className={`rounded-md px-3 py-1 text-xs font-medium ${
+                        stencilSettings.exportContent === 'elements'
+                          ? 'bg-[#a58bc4] text-[#3f3254]'
+                          : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                      }`}
+                    >
+                      Elements
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('exportContent', 'plate')}
+                      className={`rounded-md px-3 py-1 text-xs font-medium ${
+                        stencilSettings.exportContent === 'plate'
+                          ? 'bg-[#a58bc4] text-[#3f3254]'
+                          : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                      }`}
+                    >
+                      Stencil Plate
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('exportContent', 'both')}
+                      className={`rounded-md px-3 py-1 text-xs font-medium ${
+                        stencilSettings.exportContent === 'both'
+                          ? 'bg-[#a58bc4] text-[#3f3254]'
+                          : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                      }`}
+                    >
+                      Both
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {isAutoGenerator && stencilSettings.exportContent !== 'elements' ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Plate Shape</span>
+                    <HelpTip text="Plate boundary shape for cutout export." />
+                  </div>
+                  <div className="inline-flex rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-1">
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('plateShape', 'rectangle')}
+                      className={`rounded-md px-3 py-1 text-xs font-medium ${
+                        stencilSettings.plateShape === 'rectangle'
+                          ? 'bg-[#a58bc4] text-[#3f3254]'
+                          : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                      }`}
+                    >
+                      Rectangle
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('plateShape', 'square')}
+                      className={`rounded-md px-3 py-1 text-xs font-medium ${
+                        stencilSettings.plateShape === 'square'
+                          ? 'bg-[#a58bc4] text-[#3f3254]'
+                          : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                      }`}
+                    >
+                      Square
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('plateShape', 'circle')}
+                      className={`rounded-md px-3 py-1 text-xs font-medium ${
+                        stencilSettings.plateShape === 'circle'
+                          ? 'bg-[#a58bc4] text-[#3f3254]'
+                          : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                      }`}
+                    >
+                      Circle
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {isAutoGenerator && stencilSettings.exportContent !== 'elements' ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Plate Margin ({Math.round((Number(stencilSettings.plateMargin || 0.08) * 100))}%)</span>
+                    <HelpTip text="Inset margin between plate border and cutout geometry." />
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={30}
+                    value={Math.round((Number(stencilSettings.plateMargin || 0.08) * 100))}
+                    onChange={(e) => onUpdateSetting('plateMargin', Number(e.target.value) / 100)}
+                    className="w-full accent-[#9678b8]"
+                  />
+                </div>
+              ) : null}
+
+              {isLegacyGenerator &&
               stencilSettings.mode === 'pattern' &&
               stencilSettings.outlineSource !== 'colorSplit' ? (
                 <div>
@@ -3253,7 +3424,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {useImageGenerator &&
+              {isLegacyGenerator &&
               stencilSettings.mode === 'pattern' &&
               stencilSettings.outlineSource !== 'colorSplit' ? (
                 <div>
@@ -3299,7 +3470,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {useImageGenerator && stencilSettings.mode === 'pattern' && stencilSettings.outlineSource === 'fromFill' ? (
+              {isLegacyGenerator && stencilSettings.mode === 'pattern' && stencilSettings.outlineSource === 'fromFill' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Outline Width ({stencilSettings.outlineWidth})</span>
@@ -3316,7 +3487,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {useImageGenerator && stencilSettings.mode === 'pattern' && stencilSettings.outlineSource === 'colorSplit' ? (
+              {isLegacyGenerator && stencilSettings.mode === 'pattern' && stencilSettings.outlineSource === 'colorSplit' ? (
                 <div className="space-y-3 rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-[#8b7b6b]">Color Split</p>
                   <label className="block text-xs font-medium text-[#6b5b4f]">
@@ -3368,7 +3539,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {useImageGenerator && stencilSettings.mode === 'pattern' ? (
+              {isLegacyGenerator && stencilSettings.mode === 'pattern' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Pattern Scale ({stencilSettings.tileScale}%)</span>
@@ -3385,7 +3556,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {!useImageGenerator ? (
+              {normalizedGenerator === 'preset' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Pattern Density ({stencilSettings.presetDensity})</span>
@@ -3402,7 +3573,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {!useImageGenerator ? (
+              {normalizedGenerator === 'preset' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Motif Scale ({stencilSettings.presetMotifScale}%)</span>
@@ -3419,7 +3590,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {!useImageGenerator ? (
+              {normalizedGenerator === 'preset' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Pattern Angle ({Number(stencilSettings.presetAngle || 0).toFixed(1)}°)</span>
@@ -3437,7 +3608,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {!useImageGenerator ? (
+              {normalizedGenerator === 'preset' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Outline Width ({stencilSettings.outlineWidth})</span>
@@ -3454,7 +3625,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {useImageGenerator && stencilSettings.mode === 'multi' ? (
+              {(isAutoGenerator || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Layers ({stencilSettings.layerCount})</span>
@@ -3471,7 +3642,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {useImageGenerator && stencilSettings.mode === 'multi' ? (
+              {(isAutoGenerator || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
                 <label className="flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
                   <input
                     type="checkbox"
@@ -3484,7 +3655,7 @@ function StencilStudioPanel({
                 </label>
               ) : null}
 
-              {useImageGenerator ? (
+              {isLegacyGenerator ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Detail ({stencilSettings.detail})</span>
@@ -3501,7 +3672,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {useImageGenerator ? (
+              {isLegacyGenerator ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Noise Filter ({stencilSettings.noiseFilter})</span>
@@ -3518,7 +3689,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {useImageGenerator ? (
+              {isLegacyGenerator ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Bridge Width ({stencilSettings.bridgeWidth})</span>
@@ -3536,7 +3707,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {useImageGenerator ? (
+              {isLegacyGenerator ? (
                 <label className="flex items-center gap-2 text-sm text-[#5c4a3d]">
                   <input
                     type="checkbox"
@@ -3657,7 +3828,9 @@ function StencilStudioPanel({
               ) : null}
             </div>
             <p className="text-xs text-[#9a8d80]">
-              {stencilSettings.generatorType === 'preset'
+              {normalizedGenerator === 'auto'
+                ? `${stencilLayers.length} auto-separated layers generated.`
+                : stencilSettings.generatorType === 'preset'
                 ? 'Preset mode: Fill and Outline layers are generated as clean Cricut-ready vectors.'
                 : stencilSettings.mode === 'pattern'
                 ? 'Pattern mode: first layer preview shown (fills), second layer in Generated Layers.'
@@ -3683,9 +3856,20 @@ function StencilStudioPanel({
 
         {stencilLayers.length > 0 ? (
           <div className="mt-4 rounded-xl border border-[#d7c7ee] bg-[#fcf9ff] p-4">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-              Generated Layers
-            </p>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                Generated Layers
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  stencilLayers.forEach((layer) => onDownloadLayerSvg(layer.index))
+                }}
+                className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd]"
+              >
+                Download All Layers
+              </button>
+            </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {stencilLayers.map((layer) => (
                 <div key={`stencil-layer-${layer.index}`} className="rounded-lg border border-[#eee5db] p-3">
@@ -3746,6 +3930,8 @@ function StencilStudioPanel({
                         ? entry.settings?.presetFamily === 'geo-lattice'
                           ? 'Geo Lattice Preset'
                           : 'Plus Square Preset'
+                        : (entry.settings?.generatorType || 'image') === 'auto'
+                          ? 'Auto Stencil Layers'
                         : entry.mode === 'pattern'
                           ? 'Repeat Pattern Stencils'
                           : entry.mode === 'multi'
@@ -3987,7 +4173,7 @@ function App() {
   const [stencilRectifyEnabled, setStencilRectifyEnabled] = useState(false)
   const [stencilRectifyCorners, setStencilRectifyCorners] = useState(DEFAULT_RECTIFY_CORNERS)
   const [stencilSettings, setStencilSettings] = useState({
-    generatorType: 'image',
+    generatorType: 'auto',
     mode: 'multi',
     threshold: 140,
     detail: 6,
@@ -3999,6 +4185,9 @@ function App() {
     orientation: 'portrait',
     tileScale: 100,
     repeatStyle: 'seamless',
+    exportContent: 'plate',
+    plateShape: 'rectangle',
+    plateMargin: 0.08,
     presetFamily: 'plus-square',
     presetDensity: 6,
     presetMotifScale: 55,
@@ -4481,7 +4670,14 @@ function App() {
   }
 
   function updateStencilSetting(field, value) {
-    setStencilSettings((prev) => ({ ...prev, [field]: value }))
+    setStencilSettings((prev) => {
+      const next = { ...prev, [field]: value }
+      if (field === 'generatorType') {
+        if (value === 'auto') next.mode = 'multi'
+        if (value === 'preset') next.mode = 'multi'
+      }
+      return next
+    })
     if (field === 'autoStraighten') {
       setStencilStraightenAngle(0)
     }
@@ -4503,7 +4699,8 @@ function App() {
   }
 
   async function generateStencilFromImage() {
-    if (stencilSettings.generatorType !== 'preset' && !stencilImageFile) {
+    const generatorType = stencilSettings.generatorType === 'image' ? 'auto' : stencilSettings.generatorType
+    if (generatorType !== 'preset' && !stencilImageFile) {
       setStencilError('Choose an image first.')
       return
     }
@@ -4512,7 +4709,7 @@ function App() {
       setStencilBusy(true)
       setStencilError('')
       setStencilLayers([])
-      if (stencilSettings.generatorType === 'preset') {
+      if (generatorType === 'preset') {
         setStencilStraightenAngle(0)
         const presetLayers = createGeometricPresetLayers({
           paperSize: stencilSettings.paperSize,
@@ -4549,7 +4746,36 @@ function App() {
       const autoRotationDeg = stencilSettings.autoStraighten ? -estimateDominantGridAngle(image) : 0
       const rotationDeg = autoRotationDeg + Number(stencilSettings.straightenAdjust || 0)
       setStencilStraightenAngle(rotationDeg)
-      if (stencilSettings.mode === 'pattern') {
+      if (generatorType === 'auto') {
+        const posterizedLayers = createPosterizedStencilLayers(image, {
+          ...stencilSettings,
+          colorSegmentation: true,
+          rotationDeg,
+          rectifyEnabled: stencilRectifyEnabled,
+          rectifyCorners: stencilRectifyCorners,
+        })
+        const layerSvgs = posterizedLayers.map((layer) => {
+          const rawSvg = buildStencilSvg(layer.imageData, stencilSettings)
+          const svg = wrapSvgForStencilCanvas(rawSvg, {
+            paperSize: stencilSettings.paperSize,
+            orientation: stencilSettings.orientation,
+            mode: 'multi',
+          })
+          return {
+            index: layer.index,
+            name: `Layer ${layer.index + 1}`,
+            hint: layer.hint || `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`,
+            cutoffLow: layer.cutoffLow,
+            cutoffHigh: layer.cutoffHigh,
+            previewUrl: layer.previewUrl,
+            colorHex: layer.colorHex || '#7E86C2',
+            svg,
+          }
+        })
+        setStencilProcessedPreviewUrl(layerSvgs[0]?.previewUrl || '')
+        setStencilSvg(layerSvgs[0]?.svg || '')
+        setStencilLayers(layerSvgs)
+      } else if (stencilSettings.mode === 'pattern') {
         const pairLayers =
           stencilSettings.outlineSource === 'colorSplit'
             ? createColorSplitPatternMasks(image, {
@@ -4663,25 +4889,43 @@ function App() {
   function downloadStencilLayerSvg(layerIndex) {
     const layer = stencilLayers.find((entry) => entry.index === layerIndex)
     if (!layer?.svg) return
-    const blob = new Blob([layer.svg], { type: 'image/svg+xml;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
     const label = String(layer.name || `layer-${layerIndex + 1}`)
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')
-    anchor.download = `stencil-${label || `layer-${layerIndex + 1}`}-${new Date().toISOString().slice(0, 10)}.svg`
-    document.body.appendChild(anchor)
-    anchor.click()
-    document.body.removeChild(anchor)
-    URL.revokeObjectURL(url)
+    const dateTag = new Date().toISOString().slice(0, 10)
+    const parts = []
+    const mode = stencilSettings.exportContent || 'elements'
+    if (mode === 'elements' || mode === 'both') {
+      parts.push({ suffix: 'elements', svg: layer.svg })
+    }
+    if (mode === 'plate' || mode === 'both') {
+      parts.push({
+        suffix: 'plate',
+        svg: buildPlateCutSvg(layer.svg, {
+          shape: stencilSettings.plateShape || 'rectangle',
+          margin: stencilSettings.plateMargin ?? 0.08,
+        }),
+      })
+    }
+    parts.forEach((part) => {
+      const blob = new Blob([part.svg], { type: 'image/svg+xml;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `stencil-${label || `layer-${layerIndex + 1}`}-${part.suffix}-${dateTag}.svg`
+      document.body.appendChild(anchor)
+      anchor.click()
+      document.body.removeChild(anchor)
+      URL.revokeObjectURL(url)
+    })
   }
 
   function getStencilModeLabel(mode, generatorType = 'image', presetFamily = 'plus-square') {
     if (generatorType === 'preset') {
       return presetFamily === 'geo-lattice' ? 'Geo Lattice Preset' : 'Plus Square Preset'
     }
+    if (generatorType === 'auto') return 'Auto Stencil Layers'
     if (mode === 'pattern') return 'Repeat Pattern Stencils'
     if (mode === 'multi') return 'Layered Image Stencils'
     return 'Stencil'
