@@ -832,6 +832,92 @@ function erodeBinaryMask(imageData, passes = 1) {
   }
 }
 
+function estimateBinaryMaskAngle(imageData) {
+  const { data, width, height } = imageData
+  let count = 0
+  let sumX = 0
+  let sumY = 0
+  const stride = Math.max(1, Math.round(Math.min(width, height) / 280))
+  for (let y = 0; y < height; y += stride) {
+    for (let x = 0; x < width; x += stride) {
+      const idx = (y * width + x) * 4
+      if (data[idx] < 128) {
+        count += 1
+        sumX += x
+        sumY += y
+      }
+    }
+  }
+  if (count < 40) return 0
+  const meanX = sumX / count
+  const meanY = sumY / count
+  let covXX = 0
+  let covYY = 0
+  let covXY = 0
+  for (let y = 0; y < height; y += stride) {
+    for (let x = 0; x < width; x += stride) {
+      const idx = (y * width + x) * 4
+      if (data[idx] >= 128) continue
+      const dx = x - meanX
+      const dy = y - meanY
+      covXX += dx * dx
+      covYY += dy * dy
+      covXY += dx * dy
+    }
+  }
+  const thetaDeg = (0.5 * Math.atan2(2 * covXY, covXX - covYY) * 180) / Math.PI
+  const normalized = normalizeAngleForGrid(thetaDeg)
+  return Math.abs(normalized) < 0.25 ? 0 : normalized
+}
+
+function rotateBinaryMaskImageData(imageData, rotationDeg = 0) {
+  const angle = Number(rotationDeg) || 0
+  if (Math.abs(angle) < 0.01) return imageData
+  const srcCanvas = document.createElement('canvas')
+  srcCanvas.width = imageData.width
+  srcCanvas.height = imageData.height
+  const srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true })
+  if (!srcCtx) return imageData
+  srcCtx.putImageData(imageData, 0, 0)
+
+  const radians = (angle * Math.PI) / 180
+  const absCos = Math.abs(Math.cos(radians))
+  const absSin = Math.abs(Math.sin(radians))
+  const outWidth = Math.max(1, Math.round(imageData.width * absCos + imageData.height * absSin))
+  const outHeight = Math.max(1, Math.round(imageData.width * absSin + imageData.height * absCos))
+  const outCanvas = document.createElement('canvas')
+  outCanvas.width = outWidth
+  outCanvas.height = outHeight
+  const outCtx = outCanvas.getContext('2d', { willReadFrequently: true })
+  if (!outCtx) return imageData
+  outCtx.fillStyle = '#ffffff'
+  outCtx.fillRect(0, 0, outWidth, outHeight)
+  outCtx.translate(outWidth / 2, outHeight / 2)
+  outCtx.rotate(radians)
+  outCtx.drawImage(srcCanvas, -imageData.width / 2, -imageData.height / 2)
+  outCtx.setTransform(1, 0, 0, 1, 0, 0)
+
+  const rotated = outCtx.getImageData(0, 0, outWidth, outHeight)
+  for (let i = 0; i < rotated.data.length; i += 4) {
+    const value = rotated.data[i] < 128 ? 0 : 255
+    rotated.data[i] = value
+    rotated.data[i + 1] = value
+    rotated.data[i + 2] = value
+    rotated.data[i + 3] = 255
+  }
+  return rotated
+}
+
+function imageDataToDataUrl(imageData) {
+  const canvas = document.createElement('canvas')
+  canvas.width = imageData.width
+  canvas.height = imageData.height
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return ''
+  ctx.putImageData(imageData, 0, 0)
+  return canvas.toDataURL('image/png')
+}
+
 function createTwoLayerPatternMasks(
   img,
   {
@@ -903,8 +989,8 @@ function createTwoLayerPatternMasks(
   const fillNeighborhoodMask = new ImageData(new Uint8ClampedArray(fillSeedMask.data), width, height)
   dilateBinaryMask(fillNeighborhoodMask, 3)
 
-  const outlineMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
-  const fillMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
+  let outlineMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
+  let fillMask = new ImageData(new Uint8ClampedArray(source.data.length), width, height)
   let outlinePixelCount = 0
 
   for (let i = 0; i < source.data.length; i += 4) {
@@ -961,6 +1047,19 @@ function createTwoLayerPatternMasks(
 
   smoothBinaryMask(outlineMask, passes)
   smoothBinaryMask(fillMask, passes)
+  if (outlineSource === 'fromFill') {
+    // Remove thin linework leakage from fill so motifs (pluses/squares) stay isolated.
+    erodeBinaryMask(fillMask, 1)
+    dilateBinaryMask(fillMask, 1)
+    for (let i = 0; i < fillMask.data.length; i += 4) {
+      if (contentMask.data[i] >= 128) {
+        fillMask.data[i] = 255
+        fillMask.data[i + 1] = 255
+        fillMask.data[i + 2] = 255
+        fillMask.data[i + 3] = 255
+      }
+    }
+  }
 
   if (outlineSource === 'fromFill') {
     const grownFill = new ImageData(new Uint8ClampedArray(fillMask.data), width, height)
@@ -992,11 +1091,16 @@ function createTwoLayerPatternMasks(
   // Close small interior holes so motifs stay solid for cutter paths.
   dilateBinaryMask(fillMask, 1)
   erodeBinaryMask(fillMask, 1)
+  if (outlineSource === 'fromFill') {
+    const residualAngle = estimateBinaryMaskAngle(fillMask)
+    if (Math.abs(residualAngle) > 0.6) {
+      fillMask = rotateBinaryMaskImageData(fillMask, -residualAngle)
+      outlineMask = rotateBinaryMaskImageData(outlineMask, -residualAngle)
+    }
+  }
 
-  ctx.putImageData(fillMask, 0, 0)
-  const fillPreview = canvas.toDataURL('image/png')
-  ctx.putImageData(outlineMask, 0, 0)
-  const outlinePreview = canvas.toDataURL('image/png')
+  const fillPreview = imageDataToDataUrl(fillMask)
+  const outlinePreview = imageDataToDataUrl(outlineMask)
 
   return [
     {
@@ -1161,17 +1265,14 @@ function wrapSvgForStencilCanvas(
       pattern.setAttribute('width', String(tileWidth * 2))
       pattern.setAttribute('height', String(tileHeight * 2))
       const variants = [
-        { tx: 0, ty: 0, fx: 1, fy: 1 },
-        { tx: tileWidth * 2, ty: 0, fx: -1, fy: 1 },
-        { tx: 0, ty: tileHeight * 2, fx: 1, fy: -1 },
-        { tx: tileWidth * 2, ty: tileHeight * 2, fx: -1, fy: -1 },
+        { tx: 0, ty: 0 },
+        { tx: tileWidth, ty: 0 },
+        { tx: 0, ty: tileHeight },
+        { tx: tileWidth, ty: tileHeight },
       ]
       variants.forEach((variant) => {
         const tileGroup = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'g')
-        tileGroup.setAttribute(
-          'transform',
-          `translate(${variant.tx} ${variant.ty}) scale(${variant.fx} ${variant.fy}) scale(${scale})`,
-        )
+        tileGroup.setAttribute('transform', `translate(${variant.tx} ${variant.ty}) scale(${scale})`)
         sourcePaths.forEach((sourcePath) => {
           tileGroup.appendChild(buildStyledPathNode(outputDoc, sourcePath))
         })
