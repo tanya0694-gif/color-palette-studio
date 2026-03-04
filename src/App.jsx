@@ -1040,6 +1040,220 @@ function createPosterizedStencilLayers(
   return cropLayersToUnionContent(generated)
 }
 
+function createTraceStyleStencilLayers(
+  img,
+  {
+    layerCount = 8,
+    rotationDeg = 0,
+    rectifyEnabled = false,
+    rectifyCorners = DEFAULT_RECTIFY_CORNERS,
+    detail = 7,
+  } = {},
+) {
+  const rendered = renderImageToCanvas(img, { maxDim: 1200, rotationDeg })
+  const canvas = rectifyEnabled ? rectifyCanvasFromCorners(rendered.canvas, rectifyCorners) : rendered.canvas
+  const width = canvas.width
+  const height = canvas.height
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) throw new Error('Could not create canvas context.')
+  const source = ctx.getImageData(0, 0, width, height)
+  const clusterCount = Math.max(2, Math.min(12, Math.round(layerCount)))
+
+  const rgbToHslTuple = (r, g, b) => {
+    const rn = r / 255
+    const gn = g / 255
+    const bn = b / 255
+    const max = Math.max(rn, gn, bn)
+    const min = Math.min(rn, gn, bn)
+    const delta = max - min
+    let h = 0
+    let s = 0
+    const l = (max + min) / 2
+    if (delta !== 0) {
+      s = delta / (1 - Math.abs(2 * l - 1))
+      if (max === rn) h = ((gn - bn) / delta) % 6
+      else if (max === gn) h = (bn - rn) / delta + 2
+      else h = (rn - gn) / delta + 4
+      h *= 60
+      if (h < 0) h += 360
+    }
+    return { h, s: s * 100, l: l * 100 }
+  }
+
+  const edgeStats = { r: 0, g: 0, b: 0, count: 0 }
+  const edgeStride = Math.max(1, Math.round(Math.min(width, height) / 200))
+  for (let x = 0; x < width; x += edgeStride) {
+    const top = x * 4
+    const bottom = ((height - 1) * width + x) * 4
+    if (source.data[top + 3] > 20) {
+      edgeStats.r += source.data[top]
+      edgeStats.g += source.data[top + 1]
+      edgeStats.b += source.data[top + 2]
+      edgeStats.count += 1
+    }
+    if (source.data[bottom + 3] > 20) {
+      edgeStats.r += source.data[bottom]
+      edgeStats.g += source.data[bottom + 1]
+      edgeStats.b += source.data[bottom + 2]
+      edgeStats.count += 1
+    }
+  }
+  for (let y = 0; y < height; y += edgeStride) {
+    const left = y * width * 4
+    const right = (y * width + (width - 1)) * 4
+    if (source.data[left + 3] > 20) {
+      edgeStats.r += source.data[left]
+      edgeStats.g += source.data[left + 1]
+      edgeStats.b += source.data[left + 2]
+      edgeStats.count += 1
+    }
+    if (source.data[right + 3] > 20) {
+      edgeStats.r += source.data[right]
+      edgeStats.g += source.data[right + 1]
+      edgeStats.b += source.data[right + 2]
+      edgeStats.count += 1
+    }
+  }
+  const bgColor =
+    edgeStats.count > 0
+      ? { r: edgeStats.r / edgeStats.count, g: edgeStats.g / edgeStats.count, b: edgeStats.b / edgeStats.count }
+      : null
+  const isBackgroundPixel = (r, g, b, a) => {
+    if (a < 18) return true
+    const { s, l } = rgbToHslTuple(r, g, b)
+    if (bgColor) {
+      const d = rgbTripletDistance(r, g, b, bgColor.r, bgColor.g, bgColor.b)
+      if (d < 24 && s < 26 && l > 58) return true
+    }
+    if (s < 6 && l > 95) return true
+    return false
+  }
+
+  const sampleStride = Math.max(1, Math.round((11 - Math.max(1, Math.min(10, detail))) * 0.35) + 1)
+  const samples = []
+  for (let y = 0; y < height; y += sampleStride) {
+    for (let x = 0; x < width; x += sampleStride) {
+      const idx = (y * width + x) * 4
+      const r = source.data[idx]
+      const g = source.data[idx + 1]
+      const b = source.data[idx + 2]
+      const a = source.data[idx + 3]
+      if (isBackgroundPixel(r, g, b, a)) continue
+      samples.push({ r, g, b })
+    }
+  }
+  if (!samples.length) throw new Error('No traceable color content found in image.')
+
+  const centroids = []
+  centroids.push(samples[Math.floor(Math.random() * samples.length)])
+  while (centroids.length < clusterCount) {
+    let bestSample = samples[0]
+    let bestDistance = -1
+    for (let i = 0; i < samples.length; i += 1) {
+      const sample = samples[i]
+      const nearest = Math.min(
+        ...centroids.map((c) => rgbTripletDistance(sample.r, sample.g, sample.b, c.r, c.g, c.b)),
+      )
+      if (nearest > bestDistance) {
+        bestDistance = nearest
+        bestSample = sample
+      }
+    }
+    centroids.push({ ...bestSample })
+  }
+
+  for (let iter = 0; iter < 8; iter += 1) {
+    const sums = Array.from({ length: clusterCount }, () => ({ r: 0, g: 0, b: 0, count: 0 }))
+    for (let i = 0; i < samples.length; i += 1) {
+      const sample = samples[i]
+      let winner = 0
+      let winnerDistance = Number.POSITIVE_INFINITY
+      for (let c = 0; c < centroids.length; c += 1) {
+        const centroid = centroids[c]
+        const d = rgbTripletDistance(sample.r, sample.g, sample.b, centroid.r, centroid.g, centroid.b)
+        if (d < winnerDistance) {
+          winnerDistance = d
+          winner = c
+        }
+      }
+      sums[winner].r += sample.r
+      sums[winner].g += sample.g
+      sums[winner].b += sample.b
+      sums[winner].count += 1
+    }
+    for (let c = 0; c < centroids.length; c += 1) {
+      if (sums[c].count === 0) continue
+      centroids[c] = {
+        r: sums[c].r / sums[c].count,
+        g: sums[c].g / sums[c].count,
+        b: sums[c].b / sums[c].count,
+      }
+    }
+  }
+
+  const layers = Array.from({ length: clusterCount }, (_, index) => ({
+    index,
+    imageData: createBlankMask(width, height),
+    previewUrl: '',
+    colorStats: { r: 0, g: 0, b: 0, count: 0 },
+  }))
+
+  for (let i = 0; i < source.data.length; i += 4) {
+    const r = source.data[i]
+    const g = source.data[i + 1]
+    const b = source.data[i + 2]
+    const a = source.data[i + 3]
+    if (isBackgroundPixel(r, g, b, a)) continue
+    let winner = 0
+    let winnerDistance = Number.POSITIVE_INFINITY
+    for (let c = 0; c < centroids.length; c += 1) {
+      const centroid = centroids[c]
+      const d = rgbTripletDistance(r, g, b, centroid.r, centroid.g, centroid.b)
+      if (d < winnerDistance) {
+        winnerDistance = d
+        winner = c
+      }
+    }
+    const layer = layers[winner]
+    layer.imageData.data[i] = 0
+    layer.imageData.data[i + 1] = 0
+    layer.imageData.data[i + 2] = 0
+    layer.imageData.data[i + 3] = 255
+    layer.colorStats.r += r
+    layer.colorStats.g += g
+    layer.colorStats.b += b
+    layer.colorStats.count += 1
+  }
+
+  const minPixels = Math.max(8, Math.floor((width * height) / 20000))
+  const output = layers
+    .map((layer) => {
+      smoothBinaryMask(layer.imageData, 1)
+      dilateBinaryMask(layer.imageData, 1)
+      erodeBinaryMask(layer.imageData, 1)
+      removeSmallBinaryComponents(layer.imageData, Math.max(8, Math.floor((width * height) / 18000)))
+      const colorHex = safeAverageColor(layer.colorStats, '#7E86C2')
+      return {
+        index: layer.index,
+        imageData: layer.imageData,
+        previewUrl: '',
+        colorHex,
+        hint: `Trace cluster ${layer.index + 1}`,
+        pixelCount: layer.colorStats.count,
+      }
+    })
+    .filter((layer) => layer.pixelCount >= minPixels)
+    .sort((a, b) => {
+      const al = hexToHsl(a.colorHex)?.l ?? 50
+      const bl = hexToHsl(b.colorHex)?.l ?? 50
+      return bl - al
+    })
+    .map((layer, index) => ({ ...layer, index }))
+
+  if (!output.length) throw new Error('Trace could not create usable layers.')
+  return output.slice(0, clusterCount)
+}
+
 function percentile(values, ratio) {
   if (!values.length) return 0
   const sorted = values.slice().sort((a, b) => a - b)
@@ -5553,17 +5767,14 @@ function App() {
   function downloadStencilLayerSvg(layerIndex) {
     const layer = stencilLayers.find((entry) => entry.index === layerIndex)
     if (!layer?.svg) return
-    const label = String(layer.name || `layer-${layerIndex + 1}`)
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-    const dateTag = new Date().toISOString().slice(0, 10)
+    const layerNumber = layerIndex + 1
     const parts = []
     const mode = stencilSettings.exportContent || 'elements'
     if (mode === 'elements' || mode === 'both') {
       parts.push({
         suffix: 'elements',
         svg: tintStencilSvg(layer.svg, layer.colorHex || '#111111'),
+        fileName: `Stencil Elements ${layerNumber}.svg`,
       })
     }
     if (mode === 'plate' || mode === 'both') {
@@ -5573,6 +5784,7 @@ function App() {
           shape: stencilSettings.plateShape || 'rectangle',
           margin: stencilSettings.plateMargin ?? 0.08,
         }),
+        fileName: `Stencil Plate ${layerNumber}.svg`,
       })
     }
     parts.forEach((part) => {
@@ -5580,7 +5792,7 @@ function App() {
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = `stencil-${label || `layer-${layerIndex + 1}`}-${part.suffix}-${dateTag}.svg`
+      anchor.download = part.fileName || `Stencil Layer ${layerNumber}.svg`
       document.body.appendChild(anchor)
       anchor.click()
       document.body.removeChild(anchor)
