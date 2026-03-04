@@ -2810,7 +2810,7 @@ function StencilStudioPanel({
           </div>
           {activeVectorSvg ? (
             <div
-              className="h-[340px] overflow-auto rounded-lg border border-[#eee5db] bg-white p-2"
+              className="h-[340px] overflow-hidden rounded-lg border border-[#eee5db] bg-white p-2 [&_svg]:h-full [&_svg]:w-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:!overflow-visible"
               dangerouslySetInnerHTML={{ __html: activeVectorSvg }}
             />
           ) : (
@@ -2831,14 +2831,22 @@ function StencilStudioPanel({
                 <div key={`stencil-layer-${layer.index}`} className="rounded-lg border border-[#eee5db] p-3">
                   <p className="text-sm font-medium text-[#5c4a3d]">{layer.name || `Layer ${layer.index + 1}`}</p>
                   <p className="mb-2 text-xs text-[#8b7b6b]">{layer.hint || `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`}</p>
-                  <div
-                    className="mb-2 h-28 w-full overflow-hidden rounded-md border border-[#eee5db] bg-white p-1"
-                    dangerouslySetInnerHTML={{
-                      __html: layer.svg
-                        ? tintStencilSvg(layer.svg, layer.colorHex || '#7E86C2')
-                        : `<img alt="Stencil layer ${layer.index + 1}" src="${layer.previewUrl}" />`,
-                    }}
-                  />
+                  {layer.svg ? (
+                    <div
+                      className="mb-2 h-28 w-full overflow-hidden rounded-md border border-[#eee5db] bg-white p-1 [&_svg]:h-full [&_svg]:w-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:!overflow-visible"
+                      dangerouslySetInnerHTML={{
+                        __html: tintStencilSvg(layer.svg, layer.colorHex || '#7E86C2'),
+                      }}
+                    />
+                  ) : (
+                    <div className="mb-2 h-28 w-full overflow-hidden rounded-md border border-[#eee5db] bg-white p-1">
+                      <img
+                        alt={`Stencil layer ${layer.index + 1}`}
+                        src={layer.previewUrl}
+                        className="h-full w-full object-contain"
+                      />
+                    </div>
+                  )}
                   <div className="mb-2 flex items-center gap-2">
                     <span
                       className="inline-block h-3 w-3 rounded-full border border-[#b7a3d6]"
