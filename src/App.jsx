@@ -901,6 +901,15 @@ function createPosterizedStencilLayers(
     const minPixels = Math.max(16, Math.floor((width * height) / 14000))
     const generated = layers.map((layer) => {
       const isProtectedAccent = Boolean(layer.centroid?.protectedTag)
+      smoothBinaryMask(layer.imageData, 1)
+      dilateBinaryMask(layer.imageData, 1)
+      erodeBinaryMask(layer.imageData, 1)
+      removeSmallBinaryComponents(
+        layer.imageData,
+        isProtectedAccent
+          ? Math.max(4, Math.floor((width * height) / 80000))
+          : Math.max(24, Math.floor((width * height) / 12000)),
+      )
       const requiredPixels = isProtectedAccent ? 4 : minPixels
       if (layer.colorStats.count < requiredPixels) {
         for (let i = 0; i < layer.imageData.data.length; i += 4) {
@@ -1064,6 +1073,78 @@ function erodeBinaryMask(imageData, passes = 1) {
         data[idx + 2] = next
         data[idx + 3] = 255
       }
+    }
+  }
+}
+
+function removeSmallBinaryComponents(imageData, minArea = 24, threshold = 128) {
+  const { data, width, height } = imageData
+  const total = width * height
+  const visited = new Uint8Array(total)
+  const keep = new Uint8Array(total)
+  const components = []
+  const neighborOffsets = [
+    [-1, 0],
+    [1, 0],
+    [0, -1],
+    [0, 1],
+    [-1, -1],
+    [1, -1],
+    [-1, 1],
+    [1, 1],
+  ]
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const start = y * width + x
+      if (visited[start]) continue
+      visited[start] = 1
+      if (data[start * 4] >= threshold) continue
+
+      const queue = [start]
+      const pixels = [start]
+      let head = 0
+      while (head < queue.length) {
+        const current = queue[head++]
+        const cx = current % width
+        const cy = Math.floor(current / width)
+        for (let i = 0; i < neighborOffsets.length; i += 1) {
+          const nx = cx + neighborOffsets[i][0]
+          const ny = cy + neighborOffsets[i][1]
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue
+          const nIdx = ny * width + nx
+          if (visited[nIdx]) continue
+          visited[nIdx] = 1
+          if (data[nIdx * 4] >= threshold) continue
+          queue.push(nIdx)
+          pixels.push(nIdx)
+        }
+      }
+      components.push({ area: pixels.length, pixels })
+    }
+  }
+
+  if (!components.length) return
+  components.sort((a, b) => b.area - a.area)
+  const largest = components[0].area
+  const floorArea = Math.max(1, Math.round(minArea))
+  for (let i = 0; i < components.length; i += 1) {
+    const component = components[i]
+    const keepComponent = component.area >= floorArea || component.area >= Math.max(2, largest * 0.003)
+    if (!keepComponent) continue
+    for (let p = 0; p < component.pixels.length; p += 1) {
+      keep[component.pixels[p]] = 1
+    }
+  }
+
+  for (let idx = 0; idx < total; idx += 1) {
+    if (keep[idx]) continue
+    const pixel = idx * 4
+    if (data[pixel] < threshold) {
+      data[pixel] = 255
+      data[pixel + 1] = 255
+      data[pixel + 2] = 255
+      data[pixel + 3] = 255
     }
   }
 }
