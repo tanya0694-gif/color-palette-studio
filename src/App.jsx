@@ -3454,10 +3454,6 @@ function StencilStudioPanel({
   const isLegacyGenerator = normalizedGenerator === 'legacy'
   const isAutoGenerator = normalizedGenerator === 'auto'
   const isTraceGenerator = normalizedGenerator === 'trace'
-
-  useEffect(() => {
-    if (isLegacyGenerator || isAutoGenerator) setShowAdvancedGenerator(true)
-  }, [isLegacyGenerator, isAutoGenerator])
   const exportMode = stencilSettings.exportContent || 'elements'
   const exportModeLabel =
     exportMode === 'both' ? 'Elements + Stencil Plate' : exportMode === 'plate' ? 'Stencil Plate' : 'Elements'
