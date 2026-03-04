@@ -3163,6 +3163,15 @@ function StencilStudioPanel({
 
   function handleVectorPanStart(e) {
     if (!vectorViewportRef.current || !activeVectorSvg) return
+    if (e.button !== undefined && e.button !== 0) return
+    if (typeof e.currentTarget?.setPointerCapture === 'function' && e.pointerId !== undefined) {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } catch {
+        // Ignore pointer capture errors.
+      }
+    }
+    if (typeof e.preventDefault === 'function') e.preventDefault()
     setVectorPanState({
       x: e.clientX,
       y: e.clientY,
@@ -3173,13 +3182,21 @@ function StencilStudioPanel({
 
   function handleVectorPanMove(e) {
     if (!vectorPanState || !vectorViewportRef.current) return
+    if (typeof e.preventDefault === 'function') e.preventDefault()
     const dx = e.clientX - vectorPanState.x
     const dy = e.clientY - vectorPanState.y
     vectorViewportRef.current.scrollLeft = vectorPanState.left - dx
     vectorViewportRef.current.scrollTop = vectorPanState.top - dy
   }
 
-  function handleVectorPanEnd() {
+  function handleVectorPanEnd(e) {
+    if (typeof e?.currentTarget?.releasePointerCapture === 'function' && e?.pointerId !== undefined) {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      } catch {
+        // Ignore pointer capture errors.
+      }
+    }
     if (vectorPanState) setVectorPanState(null)
   }
 
@@ -4137,10 +4154,10 @@ function StencilStudioPanel({
             <div
               ref={vectorViewportRef}
               className="h-[420px] overflow-auto rounded-lg border border-[#eee5db] bg-white p-2"
-              onMouseDown={handleVectorPanStart}
-              onMouseMove={handleVectorPanMove}
-              onMouseUp={handleVectorPanEnd}
-              onMouseLeave={handleVectorPanEnd}
+              onPointerDown={handleVectorPanStart}
+              onPointerMove={handleVectorPanMove}
+              onPointerUp={handleVectorPanEnd}
+              onPointerCancel={handleVectorPanEnd}
               style={{ cursor: vectorPanState ? 'grabbing' : 'grab' }}
             >
               <div className="flex h-full min-h-full w-full min-w-full items-center justify-center overflow-visible">
