@@ -190,6 +190,10 @@ function safeAverageColor(stats, fallback = '#666666') {
   return rgbToHex(stats.r / stats.count, stats.g / stats.count, stats.b / stats.count)
 }
 
+function rgbTripletDistance(r1, g1, b1, r2, g2, b2) {
+  return Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2)
+}
+
 async function extractPaletteFromImageFile(file, count = 5) {
   if (!file) throw new Error('Choose an image first.')
   const url = URL.createObjectURL(file)
@@ -529,6 +533,7 @@ function createPosterizedStencilLayers(
     layerCount = 3,
     invert = false,
     detail = 6,
+    colorSegmentation = false,
     rotationDeg = 0,
     rectifyEnabled = false,
     rectifyCorners = DEFAULT_RECTIFY_CORNERS,
@@ -543,6 +548,149 @@ function createPosterizedStencilLayers(
 
   const source = ctx.getImageData(0, 0, width, height)
   const steps = Math.max(2, Math.min(10, Math.round(layerCount)))
+  if (colorSegmentation) {
+    const sampleStride = Math.max(4, (11 - Math.max(1, Math.min(10, detail))) * 3)
+    const bucketSize = detail >= 8 ? 12 : detail >= 6 ? 14 : 18
+    const buckets = new Map()
+    for (let i = 0; i < source.data.length; i += 4 * sampleStride) {
+      const r = source.data[i]
+      const g = source.data[i + 1]
+      const b = source.data[i + 2]
+      const a = source.data[i + 3]
+      if (a < 40) continue
+      const rq = Math.round(r / bucketSize) * bucketSize
+      const gq = Math.round(g / bucketSize) * bucketSize
+      const bq = Math.round(b / bucketSize) * bucketSize
+      const key = `${rq},${gq},${bq}`
+      const existing = buckets.get(key)
+      if (existing) {
+        existing.count += 1
+        existing.r += r
+        existing.g += g
+        existing.b += b
+      } else {
+        buckets.set(key, { count: 1, r, g, b })
+      }
+    }
+
+    const ranked = [...buckets.values()]
+      .sort((a, b) => b.count - a.count)
+      .map((entry) => ({
+        r: entry.r / entry.count,
+        g: entry.g / entry.count,
+        b: entry.b / entry.count,
+        count: entry.count,
+      }))
+
+    const selected = []
+    for (const candidate of ranked) {
+      const minDistance = selected.length
+        ? Math.min(
+            ...selected.map((picked) =>
+              rgbTripletDistance(candidate.r, candidate.g, candidate.b, picked.r, picked.g, picked.b),
+            ),
+          )
+        : Number.POSITIVE_INFINITY
+      if (minDistance > 22 || selected.length === 0) {
+        selected.push(candidate)
+      }
+      if (selected.length >= steps) break
+    }
+    for (const candidate of ranked) {
+      if (selected.length >= steps) break
+      if (selected.some((picked) => rgbTripletDistance(candidate.r, candidate.g, candidate.b, picked.r, picked.g, picked.b) < 8)) {
+        continue
+      }
+      selected.push(candidate)
+    }
+    while (selected.length < steps) {
+      const fallback = selected[selected.length - 1] || { r: 127, g: 127, b: 127 }
+      selected.push({ ...fallback, count: 1 })
+    }
+
+    const sortedCentroids = selected
+      .slice(0, steps)
+      .sort((a, b) => 0.299 * b.r + 0.587 * b.g + 0.114 * b.b - (0.299 * a.r + 0.587 * a.g + 0.114 * a.b))
+
+    const layers = Array.from({ length: steps }, (_, index) => ({
+      index,
+      cutoffLow: Math.floor((index / steps) * 255),
+      cutoffHigh: Math.floor(((index + 1) / steps) * 255),
+      imageData: new ImageData(new Uint8ClampedArray(source.data.length), width, height),
+      previewUrl: '',
+      colorStats: { r: 0, g: 0, b: 0, count: 0 },
+      centroid: sortedCentroids[index],
+    }))
+
+    for (let i = 0; i < source.data.length; i += 4) {
+      const r = source.data[i]
+      const g = source.data[i + 1]
+      const b = source.data[i + 2]
+      const a = source.data[i + 3]
+      if (a < 15) {
+        for (const layer of layers) {
+          layer.imageData.data[i] = 255
+          layer.imageData.data[i + 1] = 255
+          layer.imageData.data[i + 2] = 255
+          layer.imageData.data[i + 3] = 255
+        }
+        continue
+      }
+
+      let winningIndex = 0
+      let winningDistance = Number.POSITIVE_INFINITY
+      for (let c = 0; c < layers.length; c += 1) {
+        const centroid = layers[c].centroid || { r: 127, g: 127, b: 127 }
+        const distance = rgbTripletDistance(r, g, b, centroid.r, centroid.g, centroid.b)
+        if (distance < winningDistance) {
+          winningDistance = distance
+          winningIndex = c
+        }
+      }
+
+      for (let layerIndex = 0; layerIndex < layers.length; layerIndex += 1) {
+        const layer = layers[layerIndex]
+        const value = layerIndex === winningIndex ? 0 : 255
+        layer.imageData.data[i] = value
+        layer.imageData.data[i + 1] = value
+        layer.imageData.data[i + 2] = value
+        layer.imageData.data[i + 3] = 255
+        if (layerIndex === winningIndex) {
+          layer.colorStats.r += r
+          layer.colorStats.g += g
+          layer.colorStats.b += b
+          layer.colorStats.count += 1
+        }
+      }
+    }
+
+    const minPixels = Math.max(40, Math.floor((width * height) / 1200))
+    return layers.map((layer) => {
+      if (layer.colorStats.count < minPixels) {
+        for (let i = 0; i < layer.imageData.data.length; i += 4) {
+          layer.imageData.data[i] = 255
+          layer.imageData.data[i + 1] = 255
+          layer.imageData.data[i + 2] = 255
+          layer.imageData.data[i + 3] = 255
+        }
+      }
+      ctx.putImageData(layer.imageData, 0, 0)
+      const layerColor = safeAverageColor(
+        layer.colorStats,
+        rgbToHex(layer.centroid?.r || 127, layer.centroid?.g || 127, layer.centroid?.b || 127),
+      )
+      return {
+        index: layer.index,
+        cutoffLow: layer.cutoffLow,
+        cutoffHigh: layer.cutoffHigh,
+        imageData: layer.imageData,
+        previewUrl: canvas.toDataURL('image/png'),
+        colorHex: layerColor,
+        hint: `Color cluster ${layer.index + 1}`,
+      }
+    })
+  }
+
   const quantizeStep = Math.max(1, Math.round((11 - Math.max(1, Math.min(10, detail))) * 2))
 
   const layers = Array.from({ length: steps }, (_, index) => {
@@ -594,6 +742,7 @@ function createPosterizedStencilLayers(
       imageData: layer.imageData,
       previewUrl: canvas.toDataURL('image/png'),
       colorHex: safeAverageColor(layer.colorStats, '#7E86C2'),
+      hint: `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`,
     }
   })
 }
@@ -1078,7 +1227,7 @@ function tintStencilSvg(svgString, color = '#555555', opacity = 1) {
   return new XMLSerializer().serializeToString(svg)
 }
 
-function buildCompositeLayerPreview(layers = []) {
+function buildCompositeLayerPreview(layers = [], { useLayerColor = true } = {}) {
   const ordered = layers
     .filter((layer) => layer?.svg)
     .slice()
@@ -1108,9 +1257,10 @@ function buildCompositeLayerPreview(layers = []) {
     layerSvg.querySelectorAll('path').forEach((sourcePath) => {
       const node = compositeDoc.createElementNS('http://www.w3.org/2000/svg', 'path')
       node.setAttribute('d', sourcePath.getAttribute('d') || '')
-      node.setAttribute('fill', layer.colorHex || '#555555')
+      const paint = useLayerColor ? layer.colorHex || '#555555' : '#111111'
+      node.setAttribute('fill', paint)
       if (sourcePath.hasAttribute('stroke')) {
-        node.setAttribute('stroke', layer.colorHex || '#555555')
+        node.setAttribute('stroke', paint)
         node.setAttribute('stroke-width', sourcePath.getAttribute('stroke-width') || '1')
       }
       composite.appendChild(node)
@@ -2258,10 +2408,19 @@ function StencilStudioPanel({
 }) {
   const [isDragActive, setIsDragActive] = useState(false)
   const [dragCorner, setDragCorner] = useState(null)
-  const [vectorPreviewMode, setVectorPreviewMode] = useState('current')
-  const compositePreviewSvg = useMemo(() => buildCompositeLayerPreview(stencilLayers), [stencilLayers])
+  const [vectorPreviewMode, setVectorPreviewMode] = useState('stacked')
+  const compositePreviewSvg = useMemo(
+    () => buildCompositeLayerPreview(stencilLayers, { useLayerColor: true }),
+    [stencilLayers],
+  )
+  const cutPreviewSvg = useMemo(
+    () => buildCompositeLayerPreview(stencilLayers, { useLayerColor: false }),
+    [stencilLayers],
+  )
   const activeVectorSvg =
-    vectorPreviewMode === 'stacked' && compositePreviewSvg ? compositePreviewSvg : stencilSvg
+    vectorPreviewMode === 'stacked'
+      ? compositePreviewSvg || stencilSvg
+      : cutPreviewSvg || stencilSvg || compositePreviewSvg
 
   function HelpTip({ text }) {
     const [open, setOpen] = useState(false)
@@ -2640,6 +2799,19 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
+              {stencilSettings.mode === 'multi' ? (
+                <label className="flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(stencilSettings.matchSourceColors)}
+                    onChange={(e) => onUpdateSetting('matchSourceColors', e.target.checked)}
+                    className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
+                  />
+                  Match Source Colors
+                  <HelpTip text="Builds layers by color families from the original image, so stacked preview stays closer to the source." />
+                </label>
+              ) : null}
+
               <div>
                 <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                   <span>Detail ({stencilSettings.detail})</span>
@@ -2777,14 +2949,14 @@ function StencilStudioPanel({
                 <div className="inline-flex rounded-md border border-[#d7c7ee] bg-[#f4eefc] p-1">
                   <button
                     type="button"
-                    onClick={() => setVectorPreviewMode('current')}
+                    onClick={() => setVectorPreviewMode('cut')}
                     className={`rounded px-2 py-1 text-[10px] font-semibold ${
-                      vectorPreviewMode === 'current'
+                      vectorPreviewMode === 'cut'
                         ? 'bg-[#a58bc4] text-[#3f3254]'
                         : 'text-[#5f5276] hover:bg-white'
                     }`}
                   >
-                    Current
+                    Cut Preview
                   </button>
                   <button
                     type="button"
@@ -2804,7 +2976,9 @@ function StencilStudioPanel({
               {stencilSettings.mode === 'pattern'
                 ? 'Pattern mode: first layer preview shown (fills), second layer in Generated Layers.'
                 : stencilSettings.mode === 'multi'
-                ? `Layer 1 preview shown here. ${stencilLayers.length} layers generated.`
+                ? vectorPreviewMode === 'stacked'
+                  ? `Stacked source colors preview. ${stencilLayers.length} layers generated.`
+                  : `Cut geometry preview. ${stencilLayers.length} layers generated.`
                 : 'Black areas are stencil cut geometry'}
             </p>
           </div>
@@ -3128,6 +3302,7 @@ function App() {
     noiseFilter: 8,
     bridgeWidth: 0,
     layerCount: 3,
+    matchSourceColors: true,
     paperSize: '5x7',
     orientation: 'portrait',
     tileScale: 100,
@@ -3678,6 +3853,7 @@ function App() {
       } else if (stencilSettings.mode === 'multi') {
         const posterizedLayers = createPosterizedStencilLayers(image, {
           ...stencilSettings,
+          colorSegmentation: Boolean(stencilSettings.matchSourceColors),
           rotationDeg,
           rectifyEnabled: stencilRectifyEnabled,
           rectifyCorners: stencilRectifyCorners,
@@ -3692,7 +3868,7 @@ function App() {
           return {
             index: layer.index,
             name: `Layer ${layer.index + 1}`,
-            hint: `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`,
+            hint: layer.hint || `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`,
             cutoffLow: layer.cutoffLow,
             cutoffHigh: layer.cutoffHigh,
             previewUrl: layer.previewUrl,
