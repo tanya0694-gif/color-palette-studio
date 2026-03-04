@@ -1147,6 +1147,103 @@ function createGeometricPresetLayers({
   ]
 }
 
+function createColorSplitPatternMasks(
+  img,
+  {
+    rotationDeg = 0,
+    rectifyEnabled = false,
+    rectifyCorners = DEFAULT_RECTIFY_CORNERS,
+    splitColorA = '#B34A7D',
+    splitColorB = '#F0ECEC',
+    splitTolerance = 62,
+  } = {},
+) {
+  const rendered = renderImageToCanvas(img, { maxDim: 1400, rotationDeg })
+  const canvas = rectifyEnabled ? rectifyCanvasFromCorners(rendered.canvas, rectifyCorners) : rendered.canvas
+  const width = canvas.width
+  const height = canvas.height
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) throw new Error('Could not create canvas context.')
+
+  const source = ctx.getImageData(0, 0, width, height)
+  const colorA = hexToRgb(splitColorA) || { r: 179, g: 74, b: 125 }
+  const colorB = hexToRgb(splitColorB) || { r: 240, g: 236, b: 236 }
+  const tolerance = Math.max(18, Math.min(120, Number(splitTolerance) || 62))
+  const layerA = createBlankMask(width, height)
+  const layerB = createBlankMask(width, height)
+
+  for (let i = 0; i < source.data.length; i += 4) {
+    const r = source.data[i]
+    const g = source.data[i + 1]
+    const b = source.data[i + 2]
+    const a = source.data[i + 3]
+    if (a < 15) continue
+
+    const dA = rgbTripletDistance(r, g, b, colorA.r, colorA.g, colorA.b)
+    const dB = rgbTripletDistance(r, g, b, colorB.r, colorB.g, colorB.b)
+
+    if (dA <= tolerance && dA <= dB * 1.12) {
+      layerA.data[i] = 0
+      layerA.data[i + 1] = 0
+      layerA.data[i + 2] = 0
+      layerA.data[i + 3] = 255
+    }
+    if (dB <= tolerance && dB <= dA * 1.15) {
+      layerB.data[i] = 0
+      layerB.data[i + 1] = 0
+      layerB.data[i + 2] = 0
+      layerB.data[i + 3] = 255
+    }
+  }
+
+  erodeBinaryMask(layerA, 1)
+  dilateBinaryMask(layerA, 1)
+  smoothBinaryMask(layerA, 1)
+  erodeBinaryMask(layerB, 1)
+  dilateBinaryMask(layerB, 1)
+  smoothBinaryMask(layerB, 1)
+
+  const aAngle = estimateBinaryMaskAngle(layerA)
+  const bAngle = estimateBinaryMaskAngle(layerB)
+  const snapAngle = Math.abs(bAngle) > Math.abs(aAngle) ? bAngle : aAngle
+  let outA = layerA
+  let outB = layerB
+  if (Math.abs(snapAngle) > 0.6) {
+    outA = rotateBinaryMaskImageData(layerA, -snapAngle)
+    outB = rotateBinaryMaskImageData(layerB, -snapAngle)
+  }
+
+  const boundsA = getBinaryBounds(outA)
+  const boundsB = getBinaryBounds(outB)
+  const union = {
+    minX: Math.min(boundsA.minX, boundsB.minX),
+    minY: Math.min(boundsA.minY, boundsB.minY),
+    maxX: Math.max(boundsA.maxX, boundsB.maxX),
+    maxY: Math.max(boundsA.maxY, boundsB.maxY),
+  }
+  outA = cropBinaryImageData(outA, union, 2)
+  outB = cropBinaryImageData(outB, union, 2)
+
+  return [
+    {
+      index: 0,
+      name: 'Layer 1',
+      hint: 'Dark motif color',
+      imageData: outA,
+      previewUrl: imageDataToDataUrl(outA),
+      colorHex: normalizeHex(splitColorA) || '#B34A7D',
+    },
+    {
+      index: 1,
+      name: 'Layer 2',
+      hint: 'Light lattice color',
+      imageData: outB,
+      previewUrl: imageDataToDataUrl(outB),
+      colorHex: normalizeHex(splitColorB) || '#F0ECEC',
+    },
+  ]
+}
+
 function createTwoLayerPatternMasks(
   img,
   {
@@ -3143,7 +3240,7 @@ function StencilStudioPanel({
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Outline Source</span>
-                    <HelpTip text="From Fill builds the thin line layer by expanding the fill mask. Auto Detect tries to read white lines directly from the image." />
+                    <HelpTip text="From Fill builds outline from motif masks. Auto Detect reads bright lines directly. Color Split isolates two chosen colors (best for your red + off-white style)." />
                   </div>
                   <div className="inline-flex rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-1">
                     <button
@@ -3156,6 +3253,17 @@ function StencilStudioPanel({
                       }`}
                     >
                       From Fill
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('outlineSource', 'colorSplit')}
+                      className={`rounded-md px-3 py-1 text-xs font-medium ${
+                        stencilSettings.outlineSource === 'colorSplit'
+                          ? 'bg-[#a58bc4] text-[#3f3254]'
+                          : 'text-[#6b5b4f] hover:bg-[#f5ede6]'
+                      }`}
+                    >
+                      Color Split
                     </button>
                     <button
                       type="button"
@@ -3189,11 +3297,49 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
+              {useImageGenerator && stencilSettings.mode === 'pattern' && stencilSettings.outlineSource === 'colorSplit' ? (
+                <div className="space-y-3 rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-[#8b7b6b]">Color Split</p>
+                  <label className="block text-xs font-medium text-[#6b5b4f]">
+                    Layer 1 Color (Dark)
+                    <input
+                      type="color"
+                      value={normalizeHex(stencilSettings.splitColorA) || '#B34A7D'}
+                      onChange={(e) => onUpdateSetting('splitColorA', e.target.value)}
+                      className="mt-1 h-8 w-full rounded border border-[#d9cfc4] bg-white"
+                    />
+                  </label>
+                  <label className="block text-xs font-medium text-[#6b5b4f]">
+                    Layer 2 Color (Light)
+                    <input
+                      type="color"
+                      value={normalizeHex(stencilSettings.splitColorB) || '#F0ECEC'}
+                      onChange={(e) => onUpdateSetting('splitColorB', e.target.value)}
+                      className="mt-1 h-8 w-full rounded border border-[#d9cfc4] bg-white"
+                    />
+                  </label>
+                  <div>
+                    <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                      <span>Tolerance ({stencilSettings.splitTolerance})</span>
+                      <HelpTip text="Higher includes more nearby shades; lower is stricter to the chosen colors." />
+                    </div>
+                    <input
+                      type="range"
+                      min={18}
+                      max={120}
+                      value={Number(stencilSettings.splitTolerance || 62)}
+                      onChange={(e) => onUpdateSetting('splitTolerance', Number(e.target.value))}
+                      className="w-full accent-[#9678b8]"
+                    />
+                  </div>
+                </div>
+              ) : null}
+
               {useImageGenerator && stencilSettings.mode === 'pattern' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Pattern Scale ({stencilSettings.tileScale}%)</span>
-                    <HelpTip text="Adjusts repeat tile size on the page. Lower means more repeats; higher means larger motifs." />
+                    <HelpTip text="Adjusts repeat tile size on the page. For Color Split from photos, 100% is usually best." />
                   </div>
                   <input
                     type="range"
@@ -3824,6 +3970,9 @@ function App() {
     presetDensity: 6,
     presetMotifScale: 55,
     presetAngle: 0,
+    splitColorA: '#B34A7D',
+    splitColorB: '#F0ECEC',
+    splitTolerance: 62,
     outlineSource: 'fromFill',
     outlineWidth: 2,
     autoStraighten: true,
@@ -4368,12 +4517,22 @@ function App() {
       const rotationDeg = autoRotationDeg + Number(stencilSettings.straightenAdjust || 0)
       setStencilStraightenAngle(rotationDeg)
       if (stencilSettings.mode === 'pattern') {
-        const pairLayers = createTwoLayerPatternMasks(image, {
-          ...stencilSettings,
-          rotationDeg,
-          rectifyEnabled: stencilRectifyEnabled,
-          rectifyCorners: stencilRectifyCorners,
-        })
+        const pairLayers =
+          stencilSettings.outlineSource === 'colorSplit'
+            ? createColorSplitPatternMasks(image, {
+                rotationDeg,
+                rectifyEnabled: stencilRectifyEnabled,
+                rectifyCorners: stencilRectifyCorners,
+                splitColorA: stencilSettings.splitColorA,
+                splitColorB: stencilSettings.splitColorB,
+                splitTolerance: stencilSettings.splitTolerance,
+              })
+            : createTwoLayerPatternMasks(image, {
+                ...stencilSettings,
+                rotationDeg,
+                rectifyEnabled: stencilRectifyEnabled,
+                rectifyCorners: stencilRectifyCorners,
+              })
         const layerSvgs = pairLayers.map((layer) => {
           const rawSvg = buildStencilSvg(layer.imageData, { ...stencilSettings, noiseFilter: 1 })
           const svg = wrapSvgForStencilCanvas(rawSvg, {
@@ -4390,10 +4549,12 @@ function App() {
               layer.name === 'Outline Layer'
                 ? stencilSettings.outlineSource === 'fromFill'
                   ? `Generated from fill (width ${stencilSettings.outlineWidth})`
+                  : stencilSettings.outlineSource === 'colorSplit'
+                    ? 'Split from selected light color'
                   : 'White linework'
                 : layer.hint,
             previewUrl: layer.previewUrl,
-            colorHex: layer.index === 0 ? '#C76E9A' : '#8D8D8D',
+            colorHex: layer.colorHex || (layer.index === 0 ? '#C76E9A' : '#8D8D8D'),
             svg,
           }
         })
