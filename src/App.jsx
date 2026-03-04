@@ -1040,6 +1040,139 @@ function createPosterizedStencilLayers(
   return cropLayersToUnionContent(generated)
 }
 
+function detectTraceColorPalette(img, { maxColors = 12 } = {}) {
+  const rendered = renderImageToCanvas(img, { maxDim: 900, rotationDeg: 0 })
+  const canvas = rendered.canvas
+  const width = canvas.width
+  const height = canvas.height
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return []
+  const source = ctx.getImageData(0, 0, width, height)
+
+  const toHsl = (r, g, b) => {
+    const rn = r / 255
+    const gn = g / 255
+    const bn = b / 255
+    const max = Math.max(rn, gn, bn)
+    const min = Math.min(rn, gn, bn)
+    const delta = max - min
+    let h = 0
+    let s = 0
+    const l = (max + min) / 2
+    if (delta !== 0) {
+      s = delta / (1 - Math.abs(2 * l - 1))
+      if (max === rn) h = ((gn - bn) / delta) % 6
+      else if (max === gn) h = (bn - rn) / delta + 2
+      else h = (rn - gn) / delta + 4
+      h *= 60
+      if (h < 0) h += 360
+    }
+    return { h, s: s * 100, l: l * 100 }
+  }
+
+  const edgeStats = { r: 0, g: 0, b: 0, count: 0 }
+  const edgeStride = Math.max(1, Math.round(Math.min(width, height) / 180))
+  for (let x = 0; x < width; x += edgeStride) {
+    const top = x * 4
+    const bottom = ((height - 1) * width + x) * 4
+    if (source.data[top + 3] > 20) {
+      edgeStats.r += source.data[top]
+      edgeStats.g += source.data[top + 1]
+      edgeStats.b += source.data[top + 2]
+      edgeStats.count += 1
+    }
+    if (source.data[bottom + 3] > 20) {
+      edgeStats.r += source.data[bottom]
+      edgeStats.g += source.data[bottom + 1]
+      edgeStats.b += source.data[bottom + 2]
+      edgeStats.count += 1
+    }
+  }
+  for (let y = 0; y < height; y += edgeStride) {
+    const left = y * width * 4
+    const right = (y * width + (width - 1)) * 4
+    if (source.data[left + 3] > 20) {
+      edgeStats.r += source.data[left]
+      edgeStats.g += source.data[left + 1]
+      edgeStats.b += source.data[left + 2]
+      edgeStats.count += 1
+    }
+    if (source.data[right + 3] > 20) {
+      edgeStats.r += source.data[right]
+      edgeStats.g += source.data[right + 1]
+      edgeStats.b += source.data[right + 2]
+      edgeStats.count += 1
+    }
+  }
+  const bgColor =
+    edgeStats.count > 0
+      ? { r: edgeStats.r / edgeStats.count, g: edgeStats.g / edgeStats.count, b: edgeStats.b / edgeStats.count }
+      : null
+  const isBackgroundPixel = (r, g, b, a) => {
+    if (a < 18) return true
+    const { s, l } = toHsl(r, g, b)
+    if (bgColor) {
+      const d = rgbTripletDistance(r, g, b, bgColor.r, bgColor.g, bgColor.b)
+      if (d < 24 && s < 26 && l > 58) return true
+    }
+    if (s < 6 && l > 95) return true
+    return false
+  }
+
+  const buckets = new Map()
+  const stride = 2
+  const quant = 10
+  for (let y = 0; y < height; y += stride) {
+    for (let x = 0; x < width; x += stride) {
+      const idx = (y * width + x) * 4
+      const r = source.data[idx]
+      const g = source.data[idx + 1]
+      const b = source.data[idx + 2]
+      const a = source.data[idx + 3]
+      if (isBackgroundPixel(r, g, b, a)) continue
+      const rq = Math.round(r / quant) * quant
+      const gq = Math.round(g / quant) * quant
+      const bq = Math.round(b / quant) * quant
+      const key = `${rq},${gq},${bq}`
+      const entry = buckets.get(key)
+      if (entry) {
+        entry.count += 1
+        entry.r += r
+        entry.g += g
+        entry.b += b
+      } else {
+        buckets.set(key, { count: 1, r, g, b })
+      }
+    }
+  }
+  const ranked = [...buckets.values()]
+    .sort((a, b) => b.count - a.count)
+    .map((entry) => ({
+      hex: rgbToHex(entry.r / entry.count, entry.g / entry.count, entry.b / entry.count),
+      count: entry.count,
+    }))
+
+  const merged = []
+  for (let i = 0; i < ranked.length; i += 1) {
+    const candidate = ranked[i]
+    const candidateRgb = hexToRgb(candidate.hex)
+    if (!candidateRgb) continue
+    const existing = merged.find((item) => {
+      const rgb = hexToRgb(item.hex)
+      if (!rgb) return false
+      return rgbTripletDistance(candidateRgb.r, candidateRgb.g, candidateRgb.b, rgb.r, rgb.g, rgb.b) < 22
+    })
+    if (existing) {
+      existing.count += candidate.count
+    } else {
+      merged.push({ ...candidate })
+    }
+    if (merged.length >= maxColors * 2) break
+  }
+
+  return merged.sort((a, b) => b.count - a.count).slice(0, maxColors)
+}
+
 function createTraceStyleStencilLayers(
   img,
   {
@@ -1048,6 +1181,7 @@ function createTraceStyleStencilLayers(
     rectifyEnabled = false,
     rectifyCorners = DEFAULT_RECTIFY_CORNERS,
     detail = 7,
+    seedHexColors = [],
   } = {},
 ) {
   const rendered = renderImageToCanvas(img, { maxDim: 1200, rotationDeg })
@@ -1057,7 +1191,7 @@ function createTraceStyleStencilLayers(
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) throw new Error('Could not create canvas context.')
   const source = ctx.getImageData(0, 0, width, height)
-  const clusterCount = Math.max(2, Math.min(12, Math.round(layerCount)))
+  const requestedClusterCount = Math.max(2, Math.min(12, Math.round(layerCount)))
 
   const rgbToHslTuple = (r, g, b) => {
     const rn = r / 255
@@ -1144,8 +1278,16 @@ function createTraceStyleStencilLayers(
   }
   if (!samples.length) throw new Error('No traceable color content found in image.')
 
+  const seedCentroids = [...new Set((Array.isArray(seedHexColors) ? seedHexColors : []).map((hex) => normalizeHex(hex)).filter(Boolean))]
+    .map((hex) => hexToRgb(hex))
+    .filter(Boolean)
+    .map((rgb) => ({ ...rgb }))
+  const clusterCount = Math.max(requestedClusterCount, Math.min(12, seedCentroids.length || 0))
   const centroids = []
-  centroids.push(samples[Math.floor(Math.random() * samples.length)])
+  for (let i = 0; i < seedCentroids.length && centroids.length < clusterCount; i += 1) {
+    centroids.push(seedCentroids[i])
+  }
+  if (!centroids.length) centroids.push(samples[Math.floor(Math.random() * samples.length)])
   while (centroids.length < clusterCount) {
     let bestSample = samples[0]
     let bestDistance = -1
@@ -1162,6 +1304,7 @@ function createTraceStyleStencilLayers(
     centroids.push({ ...bestSample })
   }
 
+  const fixedCentroidCount = Math.min(seedCentroids.length, centroids.length)
   for (let iter = 0; iter < 8; iter += 1) {
     const sums = Array.from({ length: clusterCount }, () => ({ r: 0, g: 0, b: 0, count: 0 }))
     for (let i = 0; i < samples.length; i += 1) {
@@ -1181,7 +1324,7 @@ function createTraceStyleStencilLayers(
       sums[winner].b += sample.b
       sums[winner].count += 1
     }
-    for (let c = 0; c < centroids.length; c += 1) {
+    for (let c = fixedCentroidCount; c < centroids.length; c += 1) {
       if (sums[c].count === 0) continue
       centroids[c] = {
         r: sums[c].r / sums[c].count,
@@ -3416,6 +3559,7 @@ function StencilStudioPanel({
   stencilLayers,
   stencilLibrary,
   stencilSettings,
+  traceDetectedColors,
   stencilStraightenAngle,
   stencilRectifyEnabled,
   stencilRectifyCorners,
@@ -3435,6 +3579,7 @@ function StencilStudioPanel({
 }) {
   const [isDragActive, setIsDragActive] = useState(false)
   const [dragCorner, setDragCorner] = useState(null)
+  const [traceColorInput, setTraceColorInput] = useState('#FF9900')
   const [vectorPreviewMode, setVectorPreviewMode] = useState('stacked')
   const [vectorZoom, setVectorZoom] = useState(1)
   const [showAdvancedGenerator, setShowAdvancedGenerator] = useState(false)
@@ -3479,6 +3624,8 @@ function StencilStudioPanel({
       ? 'Download Plate SVG'
       : 'Download Elements SVG'
   const vectorZoomLabel = `${Math.round(vectorZoom * 100)}%`
+  const extraTraceColors = Array.isArray(stencilSettings.traceExtraColors) ? stencilSettings.traceExtraColors : []
+  const detectedTraceCount = Array.isArray(traceDetectedColors) ? traceDetectedColors.length : 0
   const getPointerPoint = (event) => {
     if (event?.touches?.[0]) return event.touches[0]
     if (event?.changedTouches?.[0]) return event.changedTouches[0]
@@ -3574,6 +3721,21 @@ function StencilStudioPanel({
     setPendingSplitColorField(null)
     splitSamplerCanvasRef.current = null
   }, [stencilImagePreviewUrl])
+
+  useEffect(() => {
+    if (!extraTraceColors.length) return
+    const validCurrent = normalizeHex(traceColorInput)
+    if (validCurrent && !extraTraceColors.includes(validCurrent)) return
+    const firstAvailable = (traceDetectedColors || []).find((entry) => {
+      const hex = normalizeHex(entry?.hex)
+      return hex && !extraTraceColors.includes(hex)
+    })
+    if (firstAvailable?.hex) {
+      setTraceColorInput(normalizeHex(firstAvailable.hex) || '#FF9900')
+    } else {
+      setTraceColorInput('#FF9900')
+    }
+  }, [traceDetectedColors, extraTraceColors, traceColorInput])
 
   function HelpTip({ text }) {
     const [open, setOpen] = useState(false)
@@ -4282,6 +4444,112 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
+              {isTraceGenerator ? (
+                <div className="space-y-3 rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                      Detected Colors ({detectedTraceCount})
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('layerCount', Math.max(2, Math.min(10, detectedTraceCount || 2)))}
+                      disabled={!detectedTraceCount}
+                      className="rounded-md border border-[#d7c7ee] bg-white px-2 py-1 text-[11px] font-medium text-[#5e4a7f] hover:bg-[#f6f0ff] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Use Count
+                    </button>
+                  </div>
+                  {detectedTraceCount ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {traceDetectedColors.map((entry, index) => {
+                        const hex = normalizeHex(entry?.hex) || '#7E86C2'
+                        const selected = extraTraceColors.includes(hex)
+                        return (
+                          <button
+                            key={`detected-color-${hex}-${index}`}
+                            type="button"
+                            onClick={() =>
+                              onUpdateSetting(
+                                'traceExtraColors',
+                                selected
+                                  ? extraTraceColors.filter((value) => value !== hex)
+                                  : [...extraTraceColors, hex].slice(0, 10),
+                              )
+                            }
+                            className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] ${
+                              selected ? 'border-[#9c82c0] bg-white text-[#4f3e6b]' : 'border-[#d7c7ee] bg-[#fcf9ff] text-[#6b5b4f]'
+                            }`}
+                            title={hex}
+                          >
+                            <span
+                              className="h-3.5 w-3.5 rounded-full border border-[#b9a9d4]"
+                              style={{ backgroundColor: hex }}
+                            />
+                            <span>{hex}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-[#7f7468]">Upload an image to detect colors.</p>
+                  )}
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-[#8b7b6b]">Missing Colors To Keep</p>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={normalizeHex(traceColorInput) || '#FF9900'}
+                        onChange={(e) => setTraceColorInput(e.target.value)}
+                        className="h-8 w-10 rounded border border-[#d9cfc4] bg-white p-0.5"
+                      />
+                      <input
+                        type="text"
+                        value={normalizeHex(traceColorInput) || traceColorInput}
+                        onChange={(e) => setTraceColorInput(formatHexInput(e.target.value))}
+                        className="h-8 flex-1 rounded border border-[#d9cfc4] bg-white px-2 text-xs text-[#5f5276]"
+                        placeholder="#FF9900"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const hex = normalizeHex(traceColorInput)
+                          if (!hex) return
+                          if (extraTraceColors.includes(hex)) return
+                          onUpdateSetting('traceExtraColors', [...extraTraceColors, hex].slice(0, 10))
+                        }}
+                        className="rounded-md border border-[#d7c7ee] bg-white px-2 py-1 text-[11px] font-medium text-[#5e4a7f] hover:bg-[#f6f0ff]"
+                      >
+                        Add
+                      </button>
+                    </div>
+                    {extraTraceColors.length ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {extraTraceColors.map((hex, idx) => (
+                          <button
+                            key={`extra-trace-color-${hex}-${idx}`}
+                            type="button"
+                            onClick={() =>
+                              onUpdateSetting(
+                                'traceExtraColors',
+                                extraTraceColors.filter((_, valueIdx) => valueIdx !== idx),
+                              )
+                            }
+                            className="inline-flex items-center gap-1 rounded-md border border-[#d7c7ee] bg-white px-1.5 py-1 text-[11px] text-[#5e4a7f] hover:bg-[#f6f0ff]"
+                            title="Remove"
+                          >
+                            <span className="h-3.5 w-3.5 rounded-full border border-[#b9a9d4]" style={{ backgroundColor: hex }} />
+                            <span>{hex}</span>
+                            <span aria-hidden="true">×</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-[#7f7468]">No locked colors yet.</p>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
               {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
                 <label className="flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
                   <input
@@ -4876,6 +5144,7 @@ function App() {
   const [stencilStraightenAngle, setStencilStraightenAngle] = useState(0)
   const [stencilRectifyEnabled, setStencilRectifyEnabled] = useState(false)
   const [stencilRectifyCorners, setStencilRectifyCorners] = useState(DEFAULT_RECTIFY_CORNERS)
+  const [traceDetectedColors, setTraceDetectedColors] = useState([])
   const [stencilSettings, setStencilSettings] = useState({
     generatorType: 'auto',
     mode: 'multi',
@@ -4900,6 +5169,7 @@ function App() {
     autoStraighten: true,
     straightenAdjust: 0,
     invert: false,
+    traceExtraColors: [],
   })
 
   useEffect(() => {
@@ -5358,6 +5628,7 @@ function App() {
     }
     if (!file) {
       setStencilImagePreviewUrl('')
+      setTraceDetectedColors([])
       return
     }
     setStencilImagePreviewUrl(URL.createObjectURL(file))
@@ -5367,6 +5638,13 @@ function App() {
     } catch {
       // If data URL fails, keep working with file/object URL only.
     }
+    try {
+      const image = await loadImageFromFile(file)
+      const detected = detectTraceColorPalette(image, { maxColors: 12 })
+      setTraceDetectedColors(detected)
+    } catch {
+      setTraceDetectedColors([])
+    }
   }
 
   function updateStencilSetting(field, value) {
@@ -5375,6 +5653,13 @@ function App() {
       if (field === 'generatorType') {
         if (value === 'auto') next.mode = 'multi'
         if (value === 'trace') next.mode = 'multi'
+      }
+      if (field === 'traceExtraColors') {
+        const cleaned = [...new Set((Array.isArray(value) ? value : []).map((hex) => normalizeHex(hex)).filter(Boolean))]
+        next.traceExtraColors = cleaned
+        if (cleaned.length > next.layerCount) {
+          next.layerCount = Math.min(10, cleaned.length)
+        }
       }
       return next
     })
@@ -5420,6 +5705,7 @@ function App() {
           rotationDeg,
           rectifyEnabled: stencilRectifyEnabled,
           rectifyCorners: stencilRectifyCorners,
+          seedHexColors: stencilSettings.traceExtraColors || [],
         })
         const layerSvgs = tracedLayers.map((layer) => {
           const rawSvg = buildStencilSvg(layer.imageData, { ...stencilSettings, noiseFilter: 1 })
@@ -6722,6 +7008,7 @@ function App() {
           stencilLayers={stencilLayers}
           stencilLibrary={stencilLibrary}
           stencilSettings={stencilSettings}
+          traceDetectedColors={traceDetectedColors}
           stencilStraightenAngle={stencilStraightenAngle}
           stencilRectifyEnabled={stencilRectifyEnabled}
           stencilRectifyCorners={stencilRectifyCorners}
