@@ -3625,6 +3625,7 @@ function StencilStudioPanel({
   const useImageGenerator = normalizedGenerator !== 'preset'
   const isLegacyGenerator = normalizedGenerator === 'legacy'
   const isAutoGenerator = normalizedGenerator === 'auto'
+  const isTraceGenerator = normalizedGenerator === 'trace'
   const exportMode = stencilSettings.exportContent || 'elements'
   const exportModeLabel =
     exportMode === 'both' ? 'Elements + Stencil Plate' : exportMode === 'plate' ? 'Stencil Plate' : 'Elements'
@@ -3798,6 +3799,8 @@ function StencilStudioPanel({
             <p className="text-sm text-[#7f7468]">
               {isAutoGenerator
                 ? 'Upload an image and auto-generate separated stencil layers for Cricut.'
+                : isTraceGenerator
+                ? 'Trace from image with SVG-style color clusters for cleaner direct stencil layers.'
                 : isLegacyGenerator
                 ? 'Legacy image tracing controls (advanced/tuning mode).'
                 : 'Use geometric presets for clean two-layer lattice stencils.'}
@@ -3860,6 +3863,17 @@ function StencilStudioPanel({
                     }`}
                   >
                     Geometric Presets
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSetting('generatorType', 'trace')}
+                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
+                      isTraceGenerator
+                        ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
+                        : 'text-[#5f5276] hover:bg-white'
+                    }`}
+                  >
+                    Trace from Image
                   </button>
                   <button
                     type="button"
@@ -4094,7 +4108,7 @@ function StencilStudioPanel({
                 </div>
               </div>
 
-              {isAutoGenerator ? (
+              {isAutoGenerator || isTraceGenerator ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Export Mode</span>
@@ -4138,7 +4152,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {isAutoGenerator && stencilSettings.exportContent !== 'elements' ? (
+              {(isAutoGenerator || isTraceGenerator) && stencilSettings.exportContent !== 'elements' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Plate Shape</span>
@@ -4182,7 +4196,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {isAutoGenerator && stencilSettings.exportContent !== 'elements' ? (
+              {(isAutoGenerator || isTraceGenerator) && stencilSettings.exportContent !== 'elements' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Plate Margin ({Math.round((Number(stencilSettings.plateMargin || 0.08) * 100))}%)</span>
@@ -4435,7 +4449,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {(isAutoGenerator || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
+              {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Layers ({stencilSettings.layerCount})</span>
@@ -4452,7 +4466,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {(isAutoGenerator || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
+              {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
                 <label className="flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
                   <input
                     type="checkbox"
@@ -4460,7 +4474,7 @@ function StencilStudioPanel({
                     onChange={(e) => onUpdateSetting('matchSourceColors', e.target.checked)}
                     className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
                   />
-                  Match Source Colors
+                  {isTraceGenerator ? 'Preserve Source Colors' : 'Match Source Colors'}
                   <HelpTip text="Builds layers by color families from the original image, so stacked preview stays closer to the source." />
                 </label>
               ) : null}
@@ -4674,6 +4688,8 @@ function StencilStudioPanel({
             <p className="text-xs text-[#9a8d80]">
               {normalizedGenerator === 'auto'
                 ? `${stencilLayers.length} auto-separated layers generated.`
+                : normalizedGenerator === 'trace'
+                ? `${stencilLayers.length} trace-style color layers generated.`
                 : stencilSettings.generatorType === 'preset'
                 ? 'Preset mode: Fill and Outline layers are generated as clean Cricut-ready vectors.'
                 : stencilSettings.mode === 'pattern'
@@ -4810,6 +4826,8 @@ function StencilStudioPanel({
                           : 'Plus Square Preset'
                         : (entry.settings?.generatorType || 'image') === 'auto'
                           ? 'Auto Stencil Layers'
+                        : (entry.settings?.generatorType || 'image') === 'trace'
+                          ? 'Trace from Image'
                         : entry.mode === 'pattern'
                           ? 'Repeat Pattern Stencils'
                           : entry.mode === 'multi'
@@ -5552,6 +5570,7 @@ function App() {
       const next = { ...prev, [field]: value }
       if (field === 'generatorType') {
         if (value === 'auto') next.mode = 'multi'
+        if (value === 'trace') next.mode = 'multi'
         if (value === 'preset') next.mode = 'multi'
       }
       return next
@@ -5624,7 +5643,34 @@ function App() {
       const autoRotationDeg = stencilSettings.autoStraighten ? -estimateDominantGridAngle(image) : 0
       const rotationDeg = autoRotationDeg + Number(stencilSettings.straightenAdjust || 0)
       setStencilStraightenAngle(rotationDeg)
-      if (generatorType === 'auto') {
+      if (generatorType === 'trace') {
+        const tracedLayers = createTraceStyleStencilLayers(image, {
+          layerCount: stencilSettings.layerCount,
+          detail: stencilSettings.detail,
+          rotationDeg,
+          rectifyEnabled: stencilRectifyEnabled,
+          rectifyCorners: stencilRectifyCorners,
+        })
+        const layerSvgs = tracedLayers.map((layer) => {
+          const rawSvg = buildStencilSvg(layer.imageData, { ...stencilSettings, noiseFilter: 1 })
+          const svg = wrapSvgForStencilCanvas(rawSvg, {
+            paperSize: stencilSettings.paperSize,
+            orientation: stencilSettings.orientation,
+            mode: 'multi',
+          })
+          return {
+            index: layer.index,
+            name: `Layer ${layer.index + 1}`,
+            hint: layer.hint || `Trace cluster ${layer.index + 1}`,
+            previewUrl: layer.previewUrl,
+            colorHex: layer.colorHex || '#7E86C2',
+            svg,
+          }
+        })
+        setStencilProcessedPreviewUrl(layerSvgs[0]?.previewUrl || '')
+        setStencilSvg(layerSvgs[0]?.svg || '')
+        setStencilLayers(layerSvgs)
+      } else if (generatorType === 'auto') {
         const posterizedLayers = createPosterizedStencilLayers(image, {
           ...stencilSettings,
           colorSegmentation: true,
@@ -5805,6 +5851,7 @@ function App() {
       return presetFamily === 'geo-lattice' ? 'Geo Lattice Preset' : 'Plus Square Preset'
     }
     if (generatorType === 'auto') return 'Auto Stencil Layers'
+    if (generatorType === 'trace') return 'Trace from Image'
     if (mode === 'pattern') return 'Repeat Pattern Stencils'
     if (mode === 'multi') return 'Layered Image Stencils'
     return 'Stencil'
