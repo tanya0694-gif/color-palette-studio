@@ -571,6 +571,80 @@ function createPosterizedStencilLayers(
   }
 
   if (colorSegmentation) {
+    const rgbToHslTuple = (r, g, b) => {
+      const rn = r / 255
+      const gn = g / 255
+      const bn = b / 255
+      const max = Math.max(rn, gn, bn)
+      const min = Math.min(rn, gn, bn)
+      const delta = max - min
+      let h = 0
+      let s = 0
+      const l = (max + min) / 2
+      if (delta !== 0) {
+        s = delta / (1 - Math.abs(2 * l - 1))
+        if (max === rn) h = ((gn - bn) / delta) % 6
+        else if (max === gn) h = (bn - rn) / delta + 2
+        else h = (rn - gn) / delta + 4
+        h *= 60
+        if (h < 0) h += 360
+      }
+      return { h, s: s * 100, l: l * 100 }
+    }
+
+    const edgeStats = { r: 0, g: 0, b: 0, count: 0 }
+    const edgeStride = Math.max(1, Math.round(Math.min(width, height) / 220))
+    for (let x = 0; x < width; x += edgeStride) {
+      const top = x * 4
+      const bottom = ((height - 1) * width + x) * 4
+      if (source.data[top + 3] > 20) {
+        edgeStats.r += source.data[top]
+        edgeStats.g += source.data[top + 1]
+        edgeStats.b += source.data[top + 2]
+        edgeStats.count += 1
+      }
+      if (source.data[bottom + 3] > 20) {
+        edgeStats.r += source.data[bottom]
+        edgeStats.g += source.data[bottom + 1]
+        edgeStats.b += source.data[bottom + 2]
+        edgeStats.count += 1
+      }
+    }
+    for (let y = 0; y < height; y += edgeStride) {
+      const left = (y * width) * 4
+      const right = (y * width + (width - 1)) * 4
+      if (source.data[left + 3] > 20) {
+        edgeStats.r += source.data[left]
+        edgeStats.g += source.data[left + 1]
+        edgeStats.b += source.data[left + 2]
+        edgeStats.count += 1
+      }
+      if (source.data[right + 3] > 20) {
+        edgeStats.r += source.data[right]
+        edgeStats.g += source.data[right + 1]
+        edgeStats.b += source.data[right + 2]
+        edgeStats.count += 1
+      }
+    }
+    const bgColor =
+      edgeStats.count > 0
+        ? {
+            r: edgeStats.r / edgeStats.count,
+            g: edgeStats.g / edgeStats.count,
+            b: edgeStats.b / edgeStats.count,
+          }
+        : null
+    const isLikelyBackgroundPixel = (r, g, b, a) => {
+      if (a < 24) return true
+      const { s, l } = rgbToHslTuple(r, g, b)
+      if (bgColor) {
+        const distance = rgbTripletDistance(r, g, b, bgColor.r, bgColor.g, bgColor.b)
+        if (distance < 22 && s < 20 && l > 60) return true
+      }
+      if (s < 8 && l > 95) return true
+      return false
+    }
+
     const sampleStride = Math.max(4, (11 - Math.max(1, Math.min(10, detail))) * 3)
     const bucketSize = detail >= 8 ? 12 : detail >= 6 ? 14 : 18
     const buckets = new Map()
@@ -579,7 +653,7 @@ function createPosterizedStencilLayers(
       const g = source.data[i + 1]
       const b = source.data[i + 2]
       const a = source.data[i + 3]
-      if (a < 40) continue
+      if (isLikelyBackgroundPixel(r, g, b, a)) continue
       const rq = Math.round(r / bucketSize) * bucketSize
       const gq = Math.round(g / bucketSize) * bucketSize
       const bq = Math.round(b / bucketSize) * bucketSize
@@ -596,13 +670,19 @@ function createPosterizedStencilLayers(
     }
 
     const ranked = [...buckets.values()]
-      .sort((a, b) => b.count - a.count)
       .map((entry) => ({
         r: entry.r / entry.count,
         g: entry.g / entry.count,
         b: entry.b / entry.count,
         count: entry.count,
       }))
+      .map((entry) => {
+        const { s, l } = rgbToHslTuple(entry.r, entry.g, entry.b)
+        // Keep small vivid accents (like orange flower centers) from being discarded.
+        const score = entry.count * (1 + s / 140) * (1 + Math.abs(l - 55) / 220)
+        return { ...entry, score, s, l }
+      })
+      .sort((a, b) => b.score - a.score)
 
     const selected = []
     for (const candidate of ranked) {
@@ -649,7 +729,7 @@ function createPosterizedStencilLayers(
       const g = source.data[i + 1]
       const b = source.data[i + 2]
       const a = source.data[i + 3]
-      if (a < 15) {
+      if (isLikelyBackgroundPixel(r, g, b, a)) {
         for (const layer of layers) {
           layer.imageData.data[i] = 255
           layer.imageData.data[i + 1] = 255
@@ -686,7 +766,7 @@ function createPosterizedStencilLayers(
       }
     }
 
-    const minPixels = Math.max(40, Math.floor((width * height) / 1200))
+    const minPixels = Math.max(16, Math.floor((width * height) / 14000))
     const generated = layers.map((layer) => {
       if (layer.colorStats.count < minPixels) {
         for (let i = 0; i < layer.imageData.data.length; i += 4) {
@@ -2993,6 +3073,7 @@ function StencilStudioPanel({
   const [isDragActive, setIsDragActive] = useState(false)
   const [dragCorner, setDragCorner] = useState(null)
   const [vectorPreviewMode, setVectorPreviewMode] = useState('stacked')
+  const [vectorZoom, setVectorZoom] = useState(1)
   const compositePreviewSvg = useMemo(
     () => buildCompositeLayerPreview(stencilLayers, { useLayerColor: true }),
     [stencilLayers],
@@ -3026,6 +3107,7 @@ function StencilStudioPanel({
       : exportMode === 'plate'
       ? 'Download Plate SVG'
       : 'Download Elements SVG'
+  const vectorZoomLabel = `${Math.round(vectorZoom * 100)}%`
 
   function HelpTip({ text }) {
     const [open, setOpen] = useState(false)
@@ -3931,6 +4013,37 @@ function StencilStudioPanel({
                   </button>
                 </div>
               ) : null}
+              {activeVectorSvg ? (
+                <div className="ml-1 inline-flex items-center gap-1 rounded-md border border-[#d7c7ee] bg-white p-1">
+                  <button
+                    type="button"
+                    onClick={() => setVectorZoom((value) => Math.max(0.5, Number((value - 0.1).toFixed(2))))}
+                    className="rounded px-2 py-1 text-xs font-semibold text-[#5f5276] hover:bg-[#f5effd]"
+                    title="Zoom out"
+                  >
+                    −
+                  </button>
+                  <span className="min-w-[44px] text-center text-[11px] font-semibold text-[#6a5986]">
+                    {vectorZoomLabel}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setVectorZoom((value) => Math.min(3, Number((value + 0.1).toFixed(2))))}
+                    className="rounded px-2 py-1 text-xs font-semibold text-[#5f5276] hover:bg-[#f5effd]"
+                    title="Zoom in"
+                  >
+                    +
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVectorZoom(1)}
+                    className="rounded px-2 py-1 text-[10px] font-semibold text-[#7f7468] hover:bg-[#f5effd]"
+                    title="Reset zoom"
+                  >
+                    Reset
+                  </button>
+                </div>
+              ) : null}
             </div>
             <p className="text-xs text-[#9a8d80]">
               {normalizedGenerator === 'auto'
@@ -3948,9 +4061,19 @@ function StencilStudioPanel({
           </div>
           {activeVectorSvg ? (
             <div
-              className="h-[420px] overflow-hidden rounded-lg border border-[#eee5db] bg-white p-2 [&_svg]:h-full [&_svg]:w-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:!overflow-visible"
-              dangerouslySetInnerHTML={{ __html: displayVectorSvg }}
-            />
+              className="h-[420px] overflow-auto rounded-lg border border-[#eee5db] bg-white p-2"
+            >
+              <div className="flex h-full min-h-full w-full min-w-full items-center justify-center overflow-visible">
+                <div
+                  className="[&_svg]:!overflow-visible [&_svg]:h-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:w-full"
+                  style={{
+                    width: `${Math.max(50, Math.round(vectorZoom * 100))}%`,
+                    height: `${Math.max(50, Math.round(vectorZoom * 100))}%`,
+                  }}
+                  dangerouslySetInnerHTML={{ __html: displayVectorSvg }}
+                />
+              </div>
+            </div>
           ) : (
             <div className="flex h-[420px] items-center justify-center rounded-lg border border-dashed border-[#ddd0c1] bg-[#faf7f4] text-sm text-[#8b7b6b]">
               Click Generate Stencil to create vectors.
