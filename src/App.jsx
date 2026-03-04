@@ -1694,6 +1694,73 @@ function tintStencilSvg(svgString, color = '#555555', opacity = 1) {
   return new XMLSerializer().serializeToString(svg)
 }
 
+function fitSvgForDisplay(svgString, paddingRatio = 0.06) {
+  if (!svgString || typeof document === 'undefined') return svgString
+  try {
+    const parser = new DOMParser()
+    const parsed = parser.parseFromString(svgString, 'image/svg+xml')
+    const svg = parsed.querySelector('svg')
+    if (!svg) return svgString
+    const paths = svg.querySelectorAll('path')
+    if (!paths.length) return svgString
+
+    const probe = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    probe.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    probe.setAttribute('width', '4096')
+    probe.setAttribute('height', '4096')
+    probe.style.position = 'absolute'
+    probe.style.left = '-99999px'
+    probe.style.top = '-99999px'
+    probe.style.visibility = 'hidden'
+
+    const imported = document.importNode(svg, true)
+    probe.appendChild(imported)
+    document.body.appendChild(probe)
+
+    let minX = Number.POSITIVE_INFINITY
+    let minY = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let maxY = Number.NEGATIVE_INFINITY
+    const probePaths = probe.querySelectorAll('path')
+    probePaths.forEach((path) => {
+      try {
+        const box = path.getBBox()
+        if (!Number.isFinite(box.width) || !Number.isFinite(box.height)) return
+        if (box.width <= 0 || box.height <= 0) return
+        minX = Math.min(minX, box.x)
+        minY = Math.min(minY, box.y)
+        maxX = Math.max(maxX, box.x + box.width)
+        maxY = Math.max(maxY, box.y + box.height)
+      } catch {
+        // Ignore invalid path boxes.
+      }
+    })
+
+    document.body.removeChild(probe)
+
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+      return svgString
+    }
+
+    const width = Math.max(1, maxX - minX)
+    const height = Math.max(1, maxY - minY)
+    const padX = width * Math.max(0, paddingRatio)
+    const padY = height * Math.max(0, paddingRatio)
+    const vbX = minX - padX
+    const vbY = minY - padY
+    const vbW = width + padX * 2
+    const vbH = height + padY * 2
+
+    svg.setAttribute('viewBox', `${vbX} ${vbY} ${vbW} ${vbH}`)
+    svg.removeAttribute('width')
+    svg.removeAttribute('height')
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')
+    return new XMLSerializer().serializeToString(svg)
+  } catch {
+    return svgString
+  }
+}
+
 function buildCompositeLayerPreview(layers = [], { useLayerColor = true } = {}) {
   const ordered = layers
     .filter((layer) => layer?.svg)
@@ -2938,11 +3005,27 @@ function StencilStudioPanel({
     vectorPreviewMode === 'stacked'
       ? compositePreviewSvg || stencilSvg
       : cutPreviewSvg || stencilSvg || compositePreviewSvg
+  const displayVectorSvg = useMemo(() => fitSvgForDisplay(activeVectorSvg), [activeVectorSvg])
   const normalizedGenerator =
     stencilSettings.generatorType === 'image' ? 'auto' : stencilSettings.generatorType || 'auto'
   const useImageGenerator = normalizedGenerator !== 'preset'
   const isLegacyGenerator = normalizedGenerator === 'legacy'
   const isAutoGenerator = normalizedGenerator === 'auto'
+  const exportMode = stencilSettings.exportContent || 'elements'
+  const exportModeLabel =
+    exportMode === 'both' ? 'Elements + Stencil Plate' : exportMode === 'plate' ? 'Stencil Plate' : 'Elements'
+  const exportFileSuffixLabel =
+    exportMode === 'both'
+      ? '`-elements-...svg` and `-plate-...svg`'
+      : exportMode === 'plate'
+      ? '`-plate-...svg`'
+      : '`-elements-...svg`'
+  const layerDownloadLabel =
+    exportMode === 'both'
+      ? 'Download Elements + Plate SVG'
+      : exportMode === 'plate'
+      ? 'Download Plate SVG'
+      : 'Download Elements SVG'
 
   function HelpTip({ text }) {
     const [open, setOpen] = useState(false)
@@ -3865,11 +3948,11 @@ function StencilStudioPanel({
           </div>
           {activeVectorSvg ? (
             <div
-              className="h-[340px] overflow-hidden rounded-lg border border-[#eee5db] bg-white p-2 [&_svg]:h-full [&_svg]:w-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:!overflow-visible"
-              dangerouslySetInnerHTML={{ __html: activeVectorSvg }}
+              className="h-[420px] overflow-hidden rounded-lg border border-[#eee5db] bg-white p-2 [&_svg]:h-full [&_svg]:w-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:!overflow-visible"
+              dangerouslySetInnerHTML={{ __html: displayVectorSvg }}
             />
           ) : (
-            <div className="flex h-[340px] items-center justify-center rounded-lg border border-dashed border-[#ddd0c1] bg-[#faf7f4] text-sm text-[#8b7b6b]">
+            <div className="flex h-[420px] items-center justify-center rounded-lg border border-dashed border-[#ddd0c1] bg-[#faf7f4] text-sm text-[#8b7b6b]">
               Click Generate Stencil to create vectors.
             </div>
           )}
@@ -3879,9 +3962,17 @@ function StencilStudioPanel({
         {stencilLayers.length > 0 ? (
           <div className="mt-4 rounded-xl border border-[#d7c7ee] bg-[#fcf9ff] p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                Generated Layers
-              </p>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Generated Layers</p>
+                <p className="mt-1 text-[11px] text-[#8b7b6b]">
+                  Download mode: <span className="font-semibold text-[#5f5276]">{exportModeLabel}</span>{' '}
+                  {isAutoGenerator ? (
+                    <>
+                      • Files save to your browser Downloads folder as {exportFileSuffixLabel}.
+                    </>
+                  ) : null}
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={() => {
@@ -3899,13 +3990,13 @@ function StencilStudioPanel({
                   <p className="mb-2 text-xs text-[#8b7b6b]">{layer.hint || `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`}</p>
                   {layer.svg ? (
                     <div
-                      className="mb-2 h-28 w-full overflow-hidden rounded-md border border-[#eee5db] bg-white p-1 [&_svg]:h-full [&_svg]:w-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:!overflow-visible"
+                      className="mb-2 h-36 w-full overflow-hidden rounded-md border border-[#eee5db] bg-white p-1 [&_svg]:h-full [&_svg]:w-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:!overflow-visible"
                       dangerouslySetInnerHTML={{
-                        __html: tintStencilSvg(layer.svg, layer.colorHex || '#7E86C2'),
+                        __html: fitSvgForDisplay(tintStencilSvg(layer.svg, layer.colorHex || '#7E86C2')),
                       }}
                     />
                   ) : (
-                    <div className="mb-2 h-28 w-full overflow-hidden rounded-md border border-[#eee5db] bg-white p-1">
+                    <div className="mb-2 h-36 w-full overflow-hidden rounded-md border border-[#eee5db] bg-white p-1">
                       <img
                         alt={`Stencil layer ${layer.index + 1}`}
                         src={layer.previewUrl}
@@ -3925,7 +4016,7 @@ function StencilStudioPanel({
                     onClick={() => onDownloadLayerSvg(layer.index)}
                     className="w-full rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
                   >
-                    Download Layer SVG
+                    {isAutoGenerator ? layerDownloadLabel : 'Download Layer SVG'}
                   </button>
                 </div>
               ))}
