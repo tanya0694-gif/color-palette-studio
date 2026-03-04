@@ -1225,13 +1225,18 @@ function createTraceStyleStencilLayers(
     layer.colorStats.count += 1
   }
 
-  const minPixels = Math.max(8, Math.floor((width * height) / 20000))
+  const minPixels = Math.max(6, Math.floor((width * height) / 70000))
   const output = layers
     .map((layer) => {
       smoothBinaryMask(layer.imageData, 1)
       dilateBinaryMask(layer.imageData, 1)
       erodeBinaryMask(layer.imageData, 1)
-      removeSmallBinaryComponents(layer.imageData, Math.max(8, Math.floor((width * height) / 18000)))
+      removeSmallBinaryComponents(
+        layer.imageData,
+        Math.max(4, Math.floor((width * height) / 90000)),
+        128,
+        0.00045,
+      )
       const colorHex = safeAverageColor(layer.colorStats, '#7E86C2')
       return {
         index: layer.index,
@@ -1339,7 +1344,7 @@ function erodeBinaryMask(imageData, passes = 1) {
   }
 }
 
-function removeSmallBinaryComponents(imageData, minArea = 24, threshold = 128) {
+function removeSmallBinaryComponents(imageData, minArea = 24, threshold = 128, relativeLargestAreaFloor = 0.003) {
   const { data, width, height } = imageData
   const total = width * height
   const visited = new Uint8Array(total)
@@ -1390,9 +1395,10 @@ function removeSmallBinaryComponents(imageData, minArea = 24, threshold = 128) {
   components.sort((a, b) => b.area - a.area)
   const largest = components[0].area
   const floorArea = Math.max(1, Math.round(minArea))
+  const relativeFloor = Math.max(0, Number(relativeLargestAreaFloor) || 0)
   for (let i = 0; i < components.length; i += 1) {
     const component = components[i]
-    const keepComponent = component.area >= floorArea || component.area >= Math.max(2, largest * 0.003)
+    const keepComponent = component.area >= floorArea || component.area >= Math.max(2, largest * relativeFloor)
     if (!keepComponent) continue
     for (let p = 0; p < component.pixels.length; p += 1) {
       keep[component.pixels[p]] = 1
