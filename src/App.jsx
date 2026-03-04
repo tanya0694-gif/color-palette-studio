@@ -2019,25 +2019,42 @@ function buildCompositeLayerPreview(layers = [], { useLayerColor = true } = {}) 
   return new XMLSerializer().serializeToString(composite)
 }
 
-function buildPlatePath({ width, height, shape = 'rectangle', margin = 0.08 }) {
+function getSvgViewBox(svgElement) {
+  const rawViewBox = String(svgElement?.getAttribute('viewBox') || '').trim()
+  if (rawViewBox) {
+    const parts = rawViewBox.split(/\s+/).map(Number)
+    if (parts.length === 4 && parts.every((value) => Number.isFinite(value))) {
+      return {
+        minX: parts[0],
+        minY: parts[1],
+        width: Math.max(1, parts[2]),
+        height: Math.max(1, parts[3]),
+      }
+    }
+  }
+  const { width, height } = getSvgViewBoxSize(svgElement)
+  return { minX: 0, minY: 0, width, height }
+}
+
+function buildPlatePath({ minX = 0, minY = 0, width, height, shape = 'rectangle', margin = 0.08 }) {
   const safeMargin = Math.max(0, Math.min(0.35, Number(margin) || 0))
   const insetX = width * safeMargin
   const insetY = height * safeMargin
-  const x = insetX
-  const y = insetY
+  const x = minX + insetX
+  const y = minY + insetY
   const w = Math.max(1, width - insetX * 2)
   const h = Math.max(1, height - insetY * 2)
 
   if (shape === 'circle') {
-    const cx = width / 2
-    const cy = height / 2
+    const cx = minX + width / 2
+    const cy = minY + height / 2
     const r = Math.max(1, Math.min(w, h) / 2)
     return `M ${cx - r} ${cy} A ${r} ${r} 0 1 0 ${cx + r} ${cy} A ${r} ${r} 0 1 0 ${cx - r} ${cy} Z`
   }
   if (shape === 'square') {
     const s = Math.max(1, Math.min(w, h))
-    const sx = (width - s) / 2
-    const sy = (height - s) / 2
+    const sx = minX + (width - s) / 2
+    const sy = minY + (height - s) / 2
     return `M ${sx} ${sy} H ${sx + s} V ${sy + s} H ${sx} Z`
   }
   return `M ${x} ${y} H ${x + w} V ${y + h} H ${x} Z`
@@ -2051,20 +2068,56 @@ function buildPlateCutSvg(
   const parsed = parser.parseFromString(layerSvg, 'image/svg+xml')
   const sourceSvg = parsed.querySelector('svg')
   if (!sourceSvg) return layerSvg
-  const { width, height } = getSvgViewBoxSize(sourceSvg)
-  const paths = [...sourceSvg.querySelectorAll('path')]
-  if (!paths.length) return layerSvg
+  const { minX, minY, width, height } = getSvgViewBox(sourceSvg)
+  const cutNodes = [...sourceSvg.children].filter(
+    (child) => child.nodeType === 1 && child.tagName?.toLowerCase() !== 'defs',
+  )
+  if (!cutNodes.length) return layerSvg
   const outputDoc = document.implementation.createDocument('http://www.w3.org/2000/svg', 'svg', null)
   const outputSvg = outputDoc.documentElement
   outputSvg.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
-  outputSvg.setAttribute('viewBox', `0 0 ${width} ${height}`)
-  const platePath = buildPlatePath({ width, height, shape, margin })
-  const holes = paths.map((path) => path.getAttribute('d') || '').filter(Boolean).join(' ')
-  const combined = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'path')
-  combined.setAttribute('d', `${platePath} ${holes}`.trim())
-  combined.setAttribute('fill', '#111111')
-  combined.setAttribute('fill-rule', 'evenodd')
-  outputSvg.appendChild(combined)
+  outputSvg.setAttribute('viewBox', `${minX} ${minY} ${width} ${height}`)
+  const maskId = `plate-cut-mask-${Math.random().toString(36).slice(2, 10)}`
+  const defs = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'defs')
+  const mask = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'mask')
+  mask.setAttribute('id', maskId)
+  mask.setAttribute('maskUnits', 'userSpaceOnUse')
+  mask.setAttribute('x', String(minX))
+  mask.setAttribute('y', String(minY))
+  mask.setAttribute('width', String(width))
+  mask.setAttribute('height', String(height))
+
+  const maskBase = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'rect')
+  maskBase.setAttribute('x', String(minX))
+  maskBase.setAttribute('y', String(minY))
+  maskBase.setAttribute('width', String(width))
+  maskBase.setAttribute('height', String(height))
+  maskBase.setAttribute('fill', '#ffffff')
+  mask.appendChild(maskBase)
+
+  cutNodes.forEach((node) => {
+    const imported = outputDoc.importNode(node, true)
+    ;[imported, ...imported.querySelectorAll?.('*')].forEach((el) => {
+      if (!el || typeof el.setAttribute !== 'function') return
+      const tag = String(el.tagName || '').toLowerCase()
+      if (tag === 'g') return
+      el.setAttribute('fill', '#000000')
+      if (el.hasAttribute('stroke')) {
+        el.setAttribute('stroke', '#000000')
+      }
+    })
+    mask.appendChild(imported)
+  })
+
+  defs.appendChild(mask)
+  outputSvg.appendChild(defs)
+
+  const platePath = buildPlatePath({ minX, minY, width, height, shape, margin })
+  const plate = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'path')
+  plate.setAttribute('d', platePath)
+  plate.setAttribute('fill', '#111111')
+  plate.setAttribute('mask', `url(#${maskId})`)
+  outputSvg.appendChild(plate)
   return new XMLSerializer().serializeToString(outputSvg)
 }
 
