@@ -3125,7 +3125,8 @@ function StencilStudioPanel({
   const [vectorPreviewMode, setVectorPreviewMode] = useState('stacked')
   const [vectorZoom, setVectorZoom] = useState(1)
   const vectorViewportRef = useRef(null)
-  const [vectorPanState, setVectorPanState] = useState(null)
+  const vectorPanStateRef = useRef(null)
+  const [isVectorPanning, setIsVectorPanning] = useState(false)
   const compositePreviewSvg = useMemo(
     () => buildCompositeLayerPreview(stencilLayers, { useLayerColor: true }),
     [stencilLayers],
@@ -3160,10 +3161,17 @@ function StencilStudioPanel({
       ? 'Download Plate SVG'
       : 'Download Elements SVG'
   const vectorZoomLabel = `${Math.round(vectorZoom * 100)}%`
+  const getPointerPoint = (event) => {
+    if (event?.touches?.[0]) return event.touches[0]
+    if (event?.changedTouches?.[0]) return event.changedTouches[0]
+    return event
+  }
 
   function handleVectorPanStart(e) {
     if (!vectorViewportRef.current || !activeVectorSvg) return
     if (e.button !== undefined && e.button !== 0) return
+    const point = getPointerPoint(e)
+    if (!Number.isFinite(point?.clientX) || !Number.isFinite(point?.clientY)) return
     if (typeof e.currentTarget?.setPointerCapture === 'function' && e.pointerId !== undefined) {
       try {
         e.currentTarget.setPointerCapture(e.pointerId)
@@ -3172,21 +3180,24 @@ function StencilStudioPanel({
       }
     }
     if (typeof e.preventDefault === 'function') e.preventDefault()
-    setVectorPanState({
-      x: e.clientX,
-      y: e.clientY,
+    vectorPanStateRef.current = {
+      x: point.clientX,
+      y: point.clientY,
       left: vectorViewportRef.current.scrollLeft,
       top: vectorViewportRef.current.scrollTop,
-    })
+    }
+    setIsVectorPanning(true)
   }
 
   function handleVectorPanMove(e) {
-    if (!vectorPanState || !vectorViewportRef.current) return
+    if (!vectorPanStateRef.current || !vectorViewportRef.current) return
+    const point = getPointerPoint(e)
+    if (!Number.isFinite(point?.clientX) || !Number.isFinite(point?.clientY)) return
     if (typeof e.preventDefault === 'function') e.preventDefault()
-    const dx = e.clientX - vectorPanState.x
-    const dy = e.clientY - vectorPanState.y
-    vectorViewportRef.current.scrollLeft = vectorPanState.left - dx
-    vectorViewportRef.current.scrollTop = vectorPanState.top - dy
+    const dx = point.clientX - vectorPanStateRef.current.x
+    const dy = point.clientY - vectorPanStateRef.current.y
+    vectorViewportRef.current.scrollLeft = vectorPanStateRef.current.left - dx
+    vectorViewportRef.current.scrollTop = vectorPanStateRef.current.top - dy
   }
 
   function handleVectorPanEnd(e) {
@@ -3197,8 +3208,45 @@ function StencilStudioPanel({
         // Ignore pointer capture errors.
       }
     }
-    if (vectorPanState) setVectorPanState(null)
+    vectorPanStateRef.current = null
+    setIsVectorPanning(false)
   }
+
+  useEffect(() => {
+    if (!isVectorPanning) return
+
+    const handleWindowMove = (event) => {
+      if (!vectorPanStateRef.current || !vectorViewportRef.current) return
+      const point =
+        event.touches && event.touches[0]
+          ? event.touches[0]
+          : event.changedTouches && event.changedTouches[0]
+            ? event.changedTouches[0]
+            : event
+      const dx = point.clientX - vectorPanStateRef.current.x
+      const dy = point.clientY - vectorPanStateRef.current.y
+      vectorViewportRef.current.scrollLeft = vectorPanStateRef.current.left - dx
+      vectorViewportRef.current.scrollTop = vectorPanStateRef.current.top - dy
+      if (typeof event.preventDefault === 'function') event.preventDefault()
+    }
+
+    const handleWindowEnd = () => {
+      vectorPanStateRef.current = null
+      setIsVectorPanning(false)
+    }
+
+    window.addEventListener('mousemove', handleWindowMove, { passive: false })
+    window.addEventListener('touchmove', handleWindowMove, { passive: false })
+    window.addEventListener('mouseup', handleWindowEnd)
+    window.addEventListener('touchend', handleWindowEnd)
+
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMove)
+      window.removeEventListener('touchmove', handleWindowMove)
+      window.removeEventListener('mouseup', handleWindowEnd)
+      window.removeEventListener('touchend', handleWindowEnd)
+    }
+  }, [isVectorPanning])
 
   function HelpTip({ text }) {
     const [open, setOpen] = useState(false)
@@ -4158,7 +4206,14 @@ function StencilStudioPanel({
               onPointerMove={handleVectorPanMove}
               onPointerUp={handleVectorPanEnd}
               onPointerCancel={handleVectorPanEnd}
-              style={{ cursor: vectorPanState ? 'grabbing' : 'grab' }}
+              onMouseDown={handleVectorPanStart}
+              onMouseMove={handleVectorPanMove}
+              onMouseUp={handleVectorPanEnd}
+              onMouseLeave={handleVectorPanEnd}
+              onTouchStart={handleVectorPanStart}
+              onTouchMove={handleVectorPanMove}
+              onTouchEnd={handleVectorPanEnd}
+              style={{ cursor: isVectorPanning ? 'grabbing' : 'grab', touchAction: 'none' }}
             >
               <div className="flex h-full min-h-full w-full min-w-full items-center justify-center overflow-visible">
                 <div
