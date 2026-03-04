@@ -5863,7 +5863,7 @@ function App() {
     document.body.appendChild(anchor)
     anchor.click()
     document.body.removeChild(anchor)
-    URL.revokeObjectURL(url)
+    window.setTimeout(() => URL.revokeObjectURL(url), 3000)
   }
 
   function downloadStencilLayerSvg(layerInput, layerNumberOverride = null) {
@@ -5907,7 +5907,7 @@ function App() {
       document.body.appendChild(anchor)
       anchor.click()
       document.body.removeChild(anchor)
-      URL.revokeObjectURL(url)
+      window.setTimeout(() => URL.revokeObjectURL(url), 3000)
     })
   }
 
