@@ -648,6 +648,8 @@ function createPosterizedStencilLayers(
     const warmAccent = { r: 0, g: 0, b: 0, weight: 0, count: 0 }
     const orangeAccent = { r: 0, g: 0, b: 0, weight: 0, count: 0 }
     const yellowAccent = { r: 0, g: 0, b: 0, weight: 0, count: 0 }
+    const greenLightAccent = { r: 0, g: 0, b: 0, weight: 0, count: 0 }
+    const greenDarkAccent = { r: 0, g: 0, b: 0, weight: 0, count: 0 }
     for (let i = 0; i < source.data.length; i += 4) {
       const r = source.data[i]
       const g = source.data[i + 1]
@@ -679,6 +681,15 @@ function createPosterizedStencilLayers(
         yellowAccent.weight += weight
         yellowAccent.count += 1
       }
+      const isGreen = h >= 80 && h <= 170 && s >= 16 && l >= 10 && l <= 92
+      if (isGreen) {
+        const target = l < 52 ? greenDarkAccent : greenLightAccent
+        target.r += r * weight
+        target.g += g * weight
+        target.b += b * weight
+        target.weight += weight
+        target.count += 1
+      }
     }
     const warmAccentCentroid =
       warmAccent.weight > 0 && warmAccent.count > Math.max(18, Math.floor((width * height) / 18000))
@@ -704,6 +715,28 @@ function createPosterizedStencilLayers(
             g: yellowAccent.g / yellowAccent.weight,
             b: yellowAccent.b / yellowAccent.weight,
             protectedTag: 'yellow',
+          }
+        : null
+    const greenLightAccentCentroid =
+      greenLightAccent.weight > 0 &&
+      greenLightAccent.count > Math.max(8, Math.floor((width * height) / 42000)) &&
+      steps >= 6
+        ? {
+            r: greenLightAccent.r / greenLightAccent.weight,
+            g: greenLightAccent.g / greenLightAccent.weight,
+            b: greenLightAccent.b / greenLightAccent.weight,
+            protectedTag: 'green-light',
+          }
+        : null
+    const greenDarkAccentCentroid =
+      greenDarkAccent.weight > 0 &&
+      greenDarkAccent.count > Math.max(8, Math.floor((width * height) / 42000)) &&
+      steps >= 6
+        ? {
+            r: greenDarkAccent.r / greenDarkAccent.weight,
+            g: greenDarkAccent.g / greenDarkAccent.weight,
+            b: greenDarkAccent.b / greenDarkAccent.weight,
+            protectedTag: 'green-dark',
           }
         : null
 
@@ -775,6 +808,21 @@ function createPosterizedStencilLayers(
     const protectedSeeds = []
     if (orangeAccentCentroid) protectedSeeds.push(orangeAccentCentroid)
     if (yellowAccentCentroid) protectedSeeds.push(yellowAccentCentroid)
+    if (greenDarkAccentCentroid) protectedSeeds.push(greenDarkAccentCentroid)
+    if (
+      greenLightAccentCentroid &&
+      (!greenDarkAccentCentroid ||
+        rgbTripletDistance(
+          greenLightAccentCentroid.r,
+          greenLightAccentCentroid.g,
+          greenLightAccentCentroid.b,
+          greenDarkAccentCentroid.r,
+          greenDarkAccentCentroid.g,
+          greenDarkAccentCentroid.b,
+        ) > 16)
+    ) {
+      protectedSeeds.push(greenLightAccentCentroid)
+    }
     if (warmAccentCentroid) protectedSeeds.push({ ...warmAccentCentroid, protectedTag: 'warm' })
     let replacementOffset = 1
     protectedSeeds.forEach((seed) => {
@@ -5513,7 +5561,10 @@ function App() {
     const parts = []
     const mode = stencilSettings.exportContent || 'elements'
     if (mode === 'elements' || mode === 'both') {
-      parts.push({ suffix: 'elements', svg: layer.svg })
+      parts.push({
+        suffix: 'elements',
+        svg: tintStencilSvg(layer.svg, layer.colorHex || '#111111'),
+      })
     }
     if (mode === 'plate' || mode === 'both') {
       parts.push({
