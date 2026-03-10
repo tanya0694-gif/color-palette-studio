@@ -1401,6 +1401,13 @@ function createTraceStyleStencilLayers(
         128,
         0.00045,
       )
+      // Extra anti-dust pass for trace output: removes isolated flecks that remain after clustering.
+      removeSmallBinaryComponents(
+        layer.imageData,
+        Math.max(10, Math.floor((width * height) / 42000)),
+        128,
+        0.0015,
+      )
       const colorHex = safeAverageColor(layer.colorStats, '#7E86C2')
       return {
         index: layer.index,
