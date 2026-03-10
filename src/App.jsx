@@ -3640,6 +3640,7 @@ function StencilStudioPanel({
   onDownloadSvg,
   onDownloadLayerSvg,
   onMergeLayers,
+  onRemoveLayerAndFill,
   onSaveToLibrary,
   onLoadFromLibrary,
   onDeleteFromLibrary,
@@ -4996,6 +4997,13 @@ function StencilStudioPanel({
                   >
                     {isAutoGenerator || isTraceGenerator ? layerDownloadLabel : 'Download Layer SVG'}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => onRemoveLayerAndFill?.(layer)}
+                    className="mt-2 w-full rounded-md border border-[#e8d9cf] bg-white px-3 py-1.5 text-xs font-medium text-[#7f5f4e] hover:bg-[#fcf6f2]"
+                  >
+                    Remove + Fill With Nearest Color
+                  </button>
                 </div>
               ))}
             </div>
@@ -6074,6 +6082,63 @@ function App() {
     }
 
     setStencilLayers((prev) => [...prev, mergedLayer])
+  }
+
+  function removeStencilLayerAndFill(layerInput) {
+    const layerKey = String(layerInput?.index ?? '')
+    if (!layerKey) return
+    setStencilLayers((prev) => {
+      const source = prev.find((layer) => String(layer?.index) === layerKey)
+      if (!source) return prev
+      if (!source.imageData) {
+        alert('This layer cannot be auto-filled. Please regenerate first.')
+        return prev
+      }
+
+      const candidates = prev.filter((layer) => String(layer?.index) !== layerKey && layer?.imageData)
+      if (!candidates.length) {
+        alert('Need at least one other layer to fill into.')
+        return prev
+      }
+
+      const target = candidates.reduce((best, current) => {
+        if (!best) return current
+        const currentDistance = colorDistance(source.colorHex || '#7E86C2', current.colorHex || '#7E86C2')
+        const bestDistance = colorDistance(source.colorHex || '#7E86C2', best.colorHex || '#7E86C2')
+        return currentDistance < bestDistance ? current : best
+      }, null)
+      if (!target) return prev
+
+      const mergedImageData = combineBinaryLayerImageData([target, source])
+      if (!mergedImageData) {
+        alert('Could not fill this layer. Please regenerate and try again.')
+        return prev
+      }
+
+      const rawSvg = buildStencilSvg(mergedImageData, { ...stencilSettings, noiseFilter: 1 })
+      const svg = wrapSvgForStencilCanvas(rawSvg, {
+        paperSize: stencilSettings.paperSize,
+        orientation: stencilSettings.orientation,
+        mode: 'multi',
+      })
+
+      const targetLabel = target.name || `Layer ${target.index + 1}`
+      const sourceLabel = source.name || `Layer ${source.index + 1}`
+      const updatedTarget = {
+        ...target,
+        imageData: mergedImageData,
+        previewUrl: imageDataToDataUrl(mergedImageData),
+        svg,
+        hint: `Filled ${sourceLabel} into ${targetLabel}`,
+      }
+
+      return prev
+        .filter((layer) => String(layer?.index) !== layerKey)
+        .map((layer, index) => {
+          const next = String(layer?.index) === String(target.index) ? updatedTarget : layer
+          return { ...next, index }
+        })
+    })
   }
 
   function getStencilModeLabel(mode, generatorType = 'image') {
@@ -7185,6 +7250,7 @@ function App() {
           onDownloadSvg={downloadStencilSvg}
           onDownloadLayerSvg={downloadStencilLayerSvg}
           onMergeLayers={combineStencilLayers}
+          onRemoveLayerAndFill={removeStencilLayerAndFill}
           onSaveToLibrary={saveStencilToLibrary}
           onLoadFromLibrary={loadStencilFromLibrary}
           onDeleteFromLibrary={deleteStencilFromLibrary}
