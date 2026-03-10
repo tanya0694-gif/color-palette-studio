@@ -1214,6 +1214,27 @@ function createTraceStyleStencilLayers(
     return { h, s: s * 100, l: l * 100 }
   }
 
+  const colorClusterDistance = (r, g, b, centroid) => {
+    const base = rgbTripletDistance(r, g, b, centroid.r, centroid.g, centroid.b)
+    const sampleHsl = rgbToHslTuple(r, g, b)
+    const centroidHsl = rgbToHslTuple(centroid.r, centroid.g, centroid.b)
+    const sharedSaturation = Math.min(sampleHsl.s, centroidHsl.s)
+    if (sharedSaturation < 18) return base
+
+    const rawHueDelta = Math.abs(sampleHsl.h - centroidHsl.h)
+    const hueDelta = Math.min(rawHueDelta, 360 - rawHueDelta)
+    const huePenalty = (hueDelta / 180) * 70 * (sharedSaturation / 100)
+
+    const isPinkFamily = (h) => h >= 320 || h <= 20
+    const isPurpleFamily = (h) => h >= 245 && h <= 310
+    const familyMismatch =
+      (isPinkFamily(sampleHsl.h) && isPurpleFamily(centroidHsl.h)) ||
+      (isPurpleFamily(sampleHsl.h) && isPinkFamily(centroidHsl.h))
+    const familyPenalty = familyMismatch ? 22 * (sharedSaturation / 100) : 0
+
+    return base + huePenalty + familyPenalty
+  }
+
   const edgeStats = { r: 0, g: 0, b: 0, count: 0 }
   const edgeStride = Math.max(1, Math.round(Math.min(width, height) / 200))
   for (let x = 0; x < width; x += edgeStride) {
@@ -1313,7 +1334,7 @@ function createTraceStyleStencilLayers(
       let winnerDistance = Number.POSITIVE_INFINITY
       for (let c = 0; c < centroids.length; c += 1) {
         const centroid = centroids[c]
-        const d = rgbTripletDistance(sample.r, sample.g, sample.b, centroid.r, centroid.g, centroid.b)
+        const d = colorClusterDistance(sample.r, sample.g, sample.b, centroid)
         if (d < winnerDistance) {
           winnerDistance = d
           winner = c
@@ -1351,7 +1372,7 @@ function createTraceStyleStencilLayers(
     let winnerDistance = Number.POSITIVE_INFINITY
     for (let c = 0; c < centroids.length; c += 1) {
       const centroid = centroids[c]
-      const d = rgbTripletDistance(r, g, b, centroid.r, centroid.g, centroid.b)
+      const d = colorClusterDistance(r, g, b, centroid)
       if (d < winnerDistance) {
         winnerDistance = d
         winner = c
