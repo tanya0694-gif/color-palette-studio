@@ -5002,7 +5002,7 @@ function StencilStudioPanel({
                     onClick={() => onRemoveLayerAndFill?.(layer)}
                     className="mt-2 w-full rounded-md border border-[#e8d9cf] bg-white px-3 py-1.5 text-xs font-medium text-[#7f5f4e] hover:bg-[#fcf6f2]"
                   >
-                    Remove + Fill With Nearest Color
+                    Remove + Choose Fill Color
                   </button>
                 </div>
               ))}
@@ -6100,13 +6100,20 @@ function App() {
         alert('Need at least one other layer to fill into.')
         return prev
       }
-
-      const target = candidates.reduce((best, current) => {
-        if (!best) return current
-        const currentDistance = colorDistance(source.colorHex || '#7E86C2', current.colorHex || '#7E86C2')
-        const bestDistance = colorDistance(source.colorHex || '#7E86C2', best.colorHex || '#7E86C2')
-        return currentDistance < bestDistance ? current : best
-      }, null)
+      const optionsText = candidates
+        .map((layer, idx) => `${idx + 1}. ${(layer.name || `Layer ${idx + 1}`).trim()} (${layer.colorHex || '#7E86C2'})`)
+        .join('\n')
+      const picked = window.prompt(
+        `Fill "${source.name || 'selected layer'}" into which layer?\nEnter number:\n\n${optionsText}`,
+        '1',
+      )
+      if (picked === null) return prev
+      const pickedIndex = Number.parseInt(String(picked || '').trim(), 10)
+      if (!Number.isFinite(pickedIndex) || pickedIndex < 1 || pickedIndex > candidates.length) {
+        alert('Invalid selection. Please enter one of the listed numbers.')
+        return prev
+      }
+      const target = candidates[pickedIndex - 1]
       if (!target) return prev
 
       const mergedImageData = combineBinaryLayerImageData([target, source])
