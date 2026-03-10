@@ -547,7 +547,7 @@ function createPosterizedStencilLayers(
   if (!ctx) throw new Error('Could not create canvas context.')
 
   const source = ctx.getImageData(0, 0, width, height)
-  const steps = Math.max(2, Math.min(10, Math.round(layerCount)))
+  const steps = Math.max(1, Math.min(15, Math.round(layerCount)))
 
   const cropLayersToUnionContent = (rawLayers) => {
     if (!rawLayers.length) return rawLayers
@@ -1040,7 +1040,7 @@ function createPosterizedStencilLayers(
   return cropLayersToUnionContent(generated)
 }
 
-function detectTraceColorPalette(img, { maxColors = 12 } = {}) {
+function detectTraceColorPalette(img, { maxColors = 15 } = {}) {
   const rendered = renderImageToCanvas(img, { maxDim: 900, rotationDeg: 0 })
   const canvas = rendered.canvas
   const width = canvas.width
@@ -1191,7 +1191,7 @@ function createTraceStyleStencilLayers(
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) throw new Error('Could not create canvas context.')
   const source = ctx.getImageData(0, 0, width, height)
-  const requestedClusterCount = Math.max(2, Math.min(12, Math.round(layerCount)))
+  const requestedClusterCount = Math.max(1, Math.min(15, Math.round(layerCount)))
 
   const rgbToHslTuple = (r, g, b) => {
     const rn = r / 255
@@ -1282,7 +1282,7 @@ function createTraceStyleStencilLayers(
     .map((hex) => hexToRgb(hex))
     .filter(Boolean)
     .map((rgb) => ({ ...rgb }))
-  const clusterCount = Math.max(requestedClusterCount, Math.min(12, seedCentroids.length || 0))
+  const clusterCount = Math.max(requestedClusterCount, Math.min(15, seedCentroids.length || 0))
   const centroids = []
   for (let i = 0; i < seedCentroids.length && centroids.length < clusterCount; i += 1) {
     centroids.push(seedCentroids[i])
@@ -2336,6 +2336,54 @@ function buildCompositeLayerPreview(layers = [], { useLayerColor = true } = {}) 
   })
 
   return new XMLSerializer().serializeToString(composite)
+}
+
+function combineBinaryLayerImageData(layerImageDatas = []) {
+  const normalized = layerImageDatas.filter((entry) => entry && entry.imageData)
+  if (!normalized.length) return null
+
+  const base = normalized[0].imageData
+  const { width, height } = base
+  const merged = createBlankMask(width, height)
+  const outData = merged.data
+  const hasMatchingDimensions = normalized.every((entry) => {
+    const current = entry.imageData
+    return current.width === width && current.height === height
+  })
+  if (!hasMatchingDimensions) return null
+
+  const maskBuffers = normalized.map((entry) => entry.imageData.data)
+  for (let i = 0; i < outData.length; i += 4) {
+    for (let index = 0; index < maskBuffers.length; index += 1) {
+      const mask = maskBuffers[index]
+      if (mask[i] < 220 || mask[i + 1] < 220 || mask[i + 2] < 220) {
+        outData[i] = 0
+        outData[i + 1] = 0
+        outData[i + 2] = 0
+        outData[i + 3] = 255
+        break
+      }
+    }
+  }
+
+  return merged
+}
+
+function averageColorFromLayers(layers = []) {
+  const stats = layers.reduce(
+    (acc, layer) => {
+      const rgb = hexToRgb(layer?.colorHex || '')
+      if (!rgb) return acc
+      acc.r += rgb.r
+      acc.g += rgb.g
+      acc.b += rgb.b
+      acc.count += 1
+      return acc
+    },
+    { r: 0, g: 0, b: 0, count: 0 },
+  )
+
+  return safeAverageColor(stats, '#7E86C2')
 }
 
 function getSvgViewBox(svgElement) {
@@ -3570,6 +3618,7 @@ function StencilStudioPanel({
   onGenerate,
   onDownloadSvg,
   onDownloadLayerSvg,
+  onMergeLayers,
   onSaveToLibrary,
   onLoadFromLibrary,
   onDeleteFromLibrary,
@@ -3585,6 +3634,7 @@ function StencilStudioPanel({
   const [showAdvancedGenerator, setShowAdvancedGenerator] = useState(false)
   const [vectorPan, setVectorPan] = useState({ x: 0, y: 0 })
   const [pendingSplitColorField, setPendingSplitColorField] = useState(null)
+  const [selectedLayerKeys, setSelectedLayerKeys] = useState([])
   const vectorPanStateRef = useRef(null)
   const previewImageRef = useRef(null)
   const splitSamplerCanvasRef = useRef(null)
@@ -3626,6 +3676,25 @@ function StencilStudioPanel({
   const vectorZoomLabel = `${Math.round(vectorZoom * 100)}%`
   const extraTraceColors = Array.isArray(stencilSettings.traceExtraColors) ? stencilSettings.traceExtraColors : []
   const detectedTraceCount = Array.isArray(traceDetectedColors) ? traceDetectedColors.length : 0
+
+  useEffect(() => {
+    setSelectedLayerKeys([])
+  }, [stencilLayers])
+
+  function layerKey(layer) {
+    return String(layer?.index)
+  }
+
+  function toggleLayerSelection(layer) {
+    const key = layerKey(layer)
+    setSelectedLayerKeys((prev) => (prev.includes(key) ? prev.filter((value) => value !== key) : [...prev, key]))
+  }
+
+  function handleMergeLayers() {
+    if (!onMergeLayers || selectedLayerKeys.length < 2) return
+    onMergeLayers(selectedLayerKeys)
+    setSelectedLayerKeys([])
+  }
   const getPointerPoint = (event) => {
     if (event?.touches?.[0]) return event.touches[0]
     if (event?.changedTouches?.[0]) return event.changedTouches[0]
@@ -4435,8 +4504,8 @@ function StencilStudioPanel({
                   </div>
                   <input
                     type="range"
-                    min={2}
-                    max={10}
+                    min={1}
+                    max={15}
                     value={stencilSettings.layerCount}
                     onChange={(e) => onUpdateSetting('layerCount', Number(e.target.value))}
                     className="w-full accent-[#9678b8]"
@@ -4452,7 +4521,7 @@ function StencilStudioPanel({
                     </p>
                     <button
                       type="button"
-                      onClick={() => onUpdateSetting('layerCount', Math.max(2, Math.min(10, detectedTraceCount || 2)))}
+                      onClick={() => onUpdateSetting('layerCount', Math.max(1, Math.min(15, detectedTraceCount || 1)))}
                       disabled={!detectedTraceCount}
                       className="rounded-md border border-[#d7c7ee] bg-white px-2 py-1 text-[11px] font-medium text-[#5e4a7f] hover:bg-[#f6f0ff] disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -4473,7 +4542,7 @@ function StencilStudioPanel({
                                 'traceExtraColors',
                                 selected
                                   ? extraTraceColors.filter((value) => value !== hex)
-                                  : [...extraTraceColors, hex].slice(0, 10),
+                                  : [...extraTraceColors, hex].slice(0, 15),
                               )
                             }
                             className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] ${
@@ -4515,7 +4584,7 @@ function StencilStudioPanel({
                           const hex = normalizeHex(traceColorInput)
                           if (!hex) return
                           if (extraTraceColors.includes(hex)) return
-                          onUpdateSetting('traceExtraColors', [...extraTraceColors, hex].slice(0, 10))
+                          onUpdateSetting('traceExtraColors', [...extraTraceColors, hex].slice(0, 15))
                         }}
                         className="rounded-md border border-[#d7c7ee] bg-white px-2 py-1 text-[11px] font-medium text-[#5e4a7f] hover:bg-[#f6f0ff]"
                       >
@@ -4834,19 +4903,46 @@ function StencilStudioPanel({
                   ) : null}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  stencilLayers.forEach((layer, orderIndex) => onDownloadLayerSvg(layer, orderIndex + 1))
-                }}
-                className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd]"
-              >
-                Download All Layers
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleMergeLayers}
+                  disabled={selectedLayerKeys.length < 2}
+                  className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Combine Selected Layers ({selectedLayerKeys.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedLayerKeys([])}
+                  disabled={selectedLayerKeys.length === 0}
+                  className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Clear Selection
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    stencilLayers.forEach((layer, orderIndex) => onDownloadLayerSvg(layer, orderIndex + 1))
+                  }}
+                  className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd]"
+                >
+                  Download All Layers
+                </button>
+              </div>
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {stencilLayers.map((layer, orderIndex) => (
                 <div key={`stencil-layer-${layer.index}`} className="rounded-lg border border-[#eee5db] p-3">
+                  <label className="mb-2 flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={selectedLayerKeys.includes(layerKey(layer))}
+                      onChange={() => toggleLayerSelection(layer)}
+                      className="h-4 w-4 rounded border-[#d7c7ee] accent-[#9678b8]"
+                    />
+                    <span>Select to combine</span>
+                  </label>
                   <p className="text-sm font-medium text-[#5c4a3d]">{layer.name || `Layer ${layer.index + 1}`}</p>
                   <p className="mb-2 text-xs text-[#8b7b6b]">{layer.hint || `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`}</p>
                   {layer.svg ? (
@@ -5640,7 +5736,7 @@ function App() {
     }
     try {
       const image = await loadImageFromFile(file)
-      const detected = detectTraceColorPalette(image, { maxColors: 12 })
+      const detected = detectTraceColorPalette(image, { maxColors: 15 })
       setTraceDetectedColors(detected)
     } catch {
       setTraceDetectedColors([])
@@ -5658,7 +5754,7 @@ function App() {
         const cleaned = [...new Set((Array.isArray(value) ? value : []).map((hex) => normalizeHex(hex)).filter(Boolean))]
         next.traceExtraColors = cleaned
         if (cleaned.length > next.layerCount) {
-          next.layerCount = Math.min(10, cleaned.length)
+          next.layerCount = Math.min(15, cleaned.length)
         }
       }
       return next
@@ -5720,6 +5816,7 @@ function App() {
             hint: layer.hint || `Trace cluster ${layer.index + 1}`,
             previewUrl: layer.previewUrl,
             colorHex: layer.colorHex || '#7E86C2',
+            imageData: layer.imageData,
             svg,
           }
         })
@@ -5749,6 +5846,7 @@ function App() {
             cutoffHigh: layer.cutoffHigh,
             previewUrl: layer.previewUrl,
             colorHex: layer.colorHex || '#7E86C2',
+            imageData: layer.imageData,
             svg,
           }
         })
@@ -5795,6 +5893,7 @@ function App() {
                 : layer.hint,
             previewUrl: layer.previewUrl,
             colorHex: layer.colorHex || (layer.index === 0 ? '#C76E9A' : '#8D8D8D'),
+            imageData: layer.imageData,
             svg,
           }
         })
@@ -5824,6 +5923,7 @@ function App() {
             cutoffHigh: layer.cutoffHigh,
             previewUrl: layer.previewUrl,
             colorHex: layer.colorHex || '#7E86C2',
+            imageData: layer.imageData,
             svg,
           }
         })
@@ -5909,6 +6009,50 @@ function App() {
       document.body.removeChild(anchor)
       window.setTimeout(() => URL.revokeObjectURL(url), 3000)
     })
+  }
+
+  function combineStencilLayers(selectedLayerKeys = []) {
+    const selected = (Array.isArray(selectedLayerKeys) ? selectedLayerKeys : [])
+      .map((key) => stencilLayers.find((layer) => String(layer?.index) === String(key)))
+      .filter((layer) => layer?.imageData)
+
+    if (selected.length < 2) {
+      alert('Could not combine the selected layers. Regenerate the stencils and try again.')
+      return
+    }
+
+    const combinedImageData = combineBinaryLayerImageData(selected)
+    if (!combinedImageData) {
+      alert('Unable to combine selected layers. Please regenerate and try again.')
+      return
+    }
+
+    const rawSvg = buildStencilSvg(combinedImageData, { ...stencilSettings, noiseFilter: 1 })
+    const svg = wrapSvgForStencilCanvas(rawSvg, {
+      paperSize: stencilSettings.paperSize,
+      orientation: stencilSettings.orientation,
+      mode: 'multi',
+    })
+
+    const selectedLayerNumbers = selected
+      .map((layer, index) => (Number.isFinite(layer?.index) ? layer.index + 1 : index + 1))
+      .join(', ')
+
+    const suggestedName = `Combined Layer ${stencilLayers.length + 1}`
+    const mergedLayerName = window.prompt('Name this combined layer:', suggestedName)
+    if (mergedLayerName === null) return
+
+    const mergedLayer = {
+      index: Date.now(),
+      name: String(mergedLayerName || '').trim() || suggestedName,
+      hint: `Combined from layer ${selectedLayerNumbers}`,
+      previewUrl: imageDataToDataUrl(combinedImageData),
+      colorHex: averageColorFromLayers(selected),
+      imageData: combinedImageData,
+      svg,
+    }
+
+    setStencilLayers((prev) => [...prev, mergedLayer])
   }
 
   function getStencilModeLabel(mode, generatorType = 'image') {
@@ -7019,6 +7163,7 @@ function App() {
           onGenerate={() => void generateStencilFromImage()}
           onDownloadSvg={downloadStencilSvg}
           onDownloadLayerSvg={downloadStencilLayerSvg}
+          onMergeLayers={combineStencilLayers}
           onSaveToLibrary={saveStencilToLibrary}
           onLoadFromLibrary={loadStencilFromLibrary}
           onDeleteFromLibrary={deleteStencilFromLibrary}
