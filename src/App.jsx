@@ -6051,13 +6051,20 @@ function App() {
           desiredTraceLayerCount,
           Math.min(15, Number(Array.isArray(traceDetectedColors) ? traceDetectedColors.length : 0) || 0),
         )
+        const detectedSeedHexes = (Array.isArray(traceDetectedColors) ? traceDetectedColors : [])
+          .map((entry) => normalizeHex(entry?.hex))
+          .filter(Boolean)
+        const lockedSeedHexes = (Array.isArray(stencilSettings.traceExtraColors) ? stencilSettings.traceExtraColors : [])
+          .map((hex) => normalizeHex(hex))
+          .filter(Boolean)
+        const traceSeedHexes = [...new Set([...lockedSeedHexes, ...detectedSeedHexes])].slice(0, 15)
         const rawTraceLayers = createTraceStyleStencilLayers(image, {
           layerCount: detectedTraceLayerCount,
           detail: stencilSettings.detail,
           rotationDeg,
           rectifyEnabled: stencilRectifyEnabled,
           rectifyCorners: stencilRectifyCorners,
-          seedHexColors: stencilSettings.traceExtraColors || [],
+          seedHexColors: traceSeedHexes,
         })
         const tracedLayers = mergeTraceLayersToTargetCount(rawTraceLayers, desiredTraceLayerCount)
         const layerSvgs = tracedLayers.map((layer) => {
