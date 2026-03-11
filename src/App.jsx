@@ -2437,13 +2437,31 @@ function mergeTraceLayersToTargetCount(layers = [], targetCount = 1) {
 
   if (working.length <= desired) return working.map((layer, index) => ({ ...layer, index }))
 
+  const layerMergeScore = (a, b) => {
+    const base = colorDistance(a.colorHex || '#7E86C2', b.colorHex || '#7E86C2')
+    const hslA = hexToHsl(a.colorHex || '#7E86C2') || { h: 0, s: 0, l: 50 }
+    const hslB = hexToHsl(b.colorHex || '#7E86C2') || { h: 0, s: 0, l: 50 }
+    const rawHueDelta = Math.abs(hslA.h - hslB.h)
+    const hueDelta = Math.min(rawHueDelta, 360 - rawHueDelta)
+    const satDelta = Math.abs(hslA.s - hslB.s)
+    const lightDelta = Math.abs(hslA.l - hslB.l)
+
+    // Penalize merges that would flatten highlights/shadows or vivid accents.
+    let penalty = hueDelta * 0.8 + satDelta * 0.45 + lightDelta * 1.8
+    if (lightDelta > 16) penalty += 70
+    if (hueDelta > 20) penalty += 90
+    if (satDelta > 28) penalty += 40
+
+    return base + penalty
+  }
+
   while (working.length > desired) {
     let pairA = 0
     let pairB = 1
     let bestDistance = Number.POSITIVE_INFINITY
     for (let i = 0; i < working.length; i += 1) {
       for (let j = i + 1; j < working.length; j += 1) {
-        const d = colorDistance(working[i].colorHex || '#7E86C2', working[j].colorHex || '#7E86C2')
+        const d = layerMergeScore(working[i], working[j])
         if (d < bestDistance) {
           bestDistance = d
           pairA = i
