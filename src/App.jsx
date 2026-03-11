@@ -2440,8 +2440,27 @@ function mergeTraceLayersToTargetCount(layers = [], targetCount = 1) {
     1,
     working.reduce((sum, layer) => sum + Math.max(0, Number(layer.pixelCount) || 0), 0),
   )
+  const getFamily = (layer) => {
+    const hsl = hexToHsl(layer?.colorHex || '#7E86C2') || { h: 0, s: 0, l: 50 }
+    if (hsl.s < 14) return 'neutral'
+    if (hsl.h >= 75 && hsl.h <= 170) return 'green'
+    if (hsl.h >= 245 && hsl.h <= 320) return 'purple'
+    if (hsl.h >= 38 && hsl.h <= 72) return 'yellow'
+    if (hsl.h >= 20 && hsl.h < 38) return 'orange'
+    if (hsl.h >= 330 || hsl.h <= 20) return 'pink'
+    return 'other'
+  }
+  const initialFamilyCounts = working.reduce((acc, layer) => {
+    const family = getFamily(layer)
+    acc[family] = (acc[family] || 0) + 1
+    return acc
+  }, {})
+  const protectedFamilyMinimums = {
+    yellow: initialFamilyCounts.yellow >= 3 && desired >= 8 ? 3 : 0,
+    pink: initialFamilyCounts.pink >= 3 && desired >= 8 ? 2 : 0,
+  }
 
-  const layerMergeScore = (a, b) => {
+  const layerMergeScore = (a, b, familyCounts) => {
     const base = colorDistance(a.colorHex || '#7E86C2', b.colorHex || '#7E86C2')
     const hslA = hexToHsl(a.colorHex || '#7E86C2') || { h: 0, s: 0, l: 50 }
     const hslB = hexToHsl(b.colorHex || '#7E86C2') || { h: 0, s: 0, l: 50 }
@@ -2463,16 +2482,31 @@ function mergeTraceLayersToTargetCount(layers = [], targetCount = 1) {
     if (isDetailA || isDetailB) penalty += 220
     if (isDetailA && isDetailB) penalty += 140
 
+    const familyA = getFamily(a)
+    const familyB = getFamily(b)
+    const minA = protectedFamilyMinimums[familyA] || 0
+    const minB = protectedFamilyMinimums[familyB] || 0
+    const countA = familyCounts[familyA] || 0
+    const countB = familyCounts[familyB] || 0
+    if (minA > 0 && countA <= minA) penalty += 1200
+    if (minB > 0 && countB <= minB) penalty += 1200
+    if (familyA === familyB && minA > 0 && countA <= minA + 1) penalty += 1800
+
     return base + penalty
   }
 
   while (working.length > desired) {
+    const familyCounts = working.reduce((acc, layer) => {
+      const family = getFamily(layer)
+      acc[family] = (acc[family] || 0) + 1
+      return acc
+    }, {})
     let pairA = 0
     let pairB = 1
     let bestDistance = Number.POSITIVE_INFINITY
     for (let i = 0; i < working.length; i += 1) {
       for (let j = i + 1; j < working.length; j += 1) {
-        const d = layerMergeScore(working[i], working[j])
+        const d = layerMergeScore(working[i], working[j], familyCounts)
         if (d < bestDistance) {
           bestDistance = d
           pairA = i
