@@ -637,6 +637,7 @@ function createPosterizedStencilLayers(
     layerCount = 3,
     invert = false,
     detail = 6,
+    noiseFilter = 8,
     colorSegmentation = false,
     removeBackground = true,
     backgroundTolerance = 26,
@@ -680,6 +681,7 @@ function createPosterizedStencilLayers(
   }
 
   if (colorSegmentation) {
+    const cleanupStrength = Math.max(0, Math.min(30, Number(noiseFilter) || 0))
     const rgbToHslTuple = (r, g, b) => {
       const rn = r / 255
       const gn = g / 255
@@ -1071,6 +1073,7 @@ function createPosterizedStencilLayers(
           ? Math.max(4, Math.floor((width * height) / 80000))
           : Math.max(24, Math.floor((width * height) / 12000)),
       )
+      fillSmallBinaryHoles(layer.imageData, Math.max(8, Math.floor((width * height) / (140000 - cleanupStrength * 3000))))
       const requiredPixels = isProtectedAccent ? 4 : minPixels
       if (layer.colorStats.count < requiredPixels) {
         for (let i = 0; i < layer.imageData.data.length; i += 4) {
@@ -1098,6 +1101,7 @@ function createPosterizedStencilLayers(
   }
 
   const quantizeStep = Math.max(1, Math.round((11 - Math.max(1, Math.min(10, detail))) * 2))
+  const cleanupStrength = Math.max(0, Math.min(30, Number(noiseFilter) || 0))
 
   const layers = Array.from({ length: steps }, (_, index) => {
     const data = new Uint8ClampedArray(source.data.length)
@@ -1151,6 +1155,8 @@ function createPosterizedStencilLayers(
   }
 
   const generated = layers.map((layer) => {
+    removeSmallBinaryComponents(layer.imageData, Math.max(8, Math.floor((width * height) / (180000 - cleanupStrength * 3500))), 128, 0)
+    fillSmallBinaryHoles(layer.imageData, Math.max(6, Math.floor((width * height) / (220000 - cleanupStrength * 3200))))
     return {
       index: layer.index,
       cutoffLow: layer.cutoffLow,
@@ -1311,6 +1317,7 @@ function createTraceStyleStencilLayers(
     rectifyCorners = DEFAULT_RECTIFY_CORNERS,
     detail = 7,
     seedHexColors = [],
+    noiseFilter = 8,
     removeBackground = true,
     backgroundTolerance = 26,
   } = {},
@@ -1527,6 +1534,7 @@ function createTraceStyleStencilLayers(
   }
 
   const minPixels = Math.max(6, Math.floor((width * height) / 70000))
+  const cleanupStrength = Math.max(0, Math.min(30, Number(noiseFilter) || 0))
   const output = layers
     .map((layer) => {
       smoothBinaryMask(layer.imageData, 1)
@@ -1534,14 +1542,15 @@ function createTraceStyleStencilLayers(
       erodeBinaryMask(layer.imageData, 1)
       removeSmallBinaryComponents(
         layer.imageData,
-        Math.max(4, Math.floor((width * height) / 90000)),
+        Math.max(4, Math.floor((width * height) / (90000 - cleanupStrength * 1200))),
         128,
         0.00045,
       )
+      fillSmallBinaryHoles(layer.imageData, Math.max(6, Math.floor((width * height) / (130000 - cleanupStrength * 1700))))
       // Extra anti-dust pass for trace output: removes isolated flecks that remain after clustering.
       removeSmallBinaryComponents(
         layer.imageData,
-        Math.max(10, Math.floor((width * height) / 42000)),
+        Math.max(10, Math.floor((width * height) / (42000 - cleanupStrength * 500))),
         128,
         0.0015,
       )
@@ -1723,6 +1732,25 @@ function removeSmallBinaryComponents(imageData, minArea = 24, threshold = 128, r
       data[pixel + 3] = 255
     }
   }
+}
+
+function invertBinaryMask(imageData) {
+  if (!imageData?.data) return
+  const { data } = imageData
+  for (let i = 0; i < data.length; i += 4) {
+    const inverted = 255 - data[i]
+    data[i] = inverted
+    data[i + 1] = inverted
+    data[i + 2] = inverted
+    data[i + 3] = 255
+  }
+}
+
+function fillSmallBinaryHoles(imageData, maxHoleArea = 20) {
+  if (!imageData?.data) return
+  invertBinaryMask(imageData)
+  removeSmallBinaryComponents(imageData, Math.max(2, Math.round(maxHoleArea)), 128, 0)
+  invertBinaryMask(imageData)
 }
 
 function estimateBinaryMaskAngle(imageData) {
@@ -5110,7 +5138,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {isLegacyGenerator ? (
+              {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Detail ({stencilSettings.detail})</span>
@@ -5127,11 +5155,11 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {isLegacyGenerator ? (
+              {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Noise Filter ({stencilSettings.noiseFilter})</span>
-                    <HelpTip text="Removes tiny fragments/specks. Keep low (0-2) for intricate designs; increase to clean messy imports." />
+                    <HelpTip text="Higher removes tiny blobs and fills micro speckles. For clean illustration starts, try 10-18." />
                   </div>
                   <input
                     type="range"
@@ -6427,6 +6455,7 @@ function App() {
         const rawTraceLayers = createTraceStyleStencilLayers(image, {
           layerCount: detectedTraceLayerCount,
           detail: stencilSettings.detail,
+          noiseFilter: stencilSettings.noiseFilter,
           rotationDeg,
           rectifyEnabled: stencilRectifyEnabled,
           rectifyCorners: stencilRectifyCorners,
@@ -6462,6 +6491,7 @@ function App() {
         const posterizedLayers = createPosterizedStencilLayers(image, {
           ...stencilSettings,
           colorSegmentation: true,
+          noiseFilter: stencilSettings.noiseFilter,
           rotationDeg,
           rectifyEnabled: stencilRectifyEnabled,
           rectifyCorners: stencilRectifyCorners,
@@ -6542,6 +6572,7 @@ function App() {
         const posterizedLayers = createPosterizedStencilLayers(image, {
           ...stencilSettings,
           colorSegmentation: Boolean(stencilSettings.matchSourceColors),
+          noiseFilter: stencilSettings.noiseFilter,
           rotationDeg,
           rectifyEnabled: stencilRectifyEnabled,
           rectifyCorners: stencilRectifyCorners,
