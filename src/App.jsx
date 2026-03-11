@@ -2397,6 +2397,17 @@ function combineBinaryLayerImageData(layerImageDatas = []) {
   return merged
 }
 
+function countFilledPixels(imageData, threshold = 220) {
+  if (!imageData?.data) return 0
+  let count = 0
+  for (let i = 0; i < imageData.data.length; i += 4) {
+    if (imageData.data[i] < threshold || imageData.data[i + 1] < threshold || imageData.data[i + 2] < threshold) {
+      count += 1
+    }
+  }
+  return count
+}
+
 function averageColorFromLayers(layers = []) {
   const stats = layers.reduce(
     (acc, layer) => {
@@ -2412,6 +2423,73 @@ function averageColorFromLayers(layers = []) {
   )
 
   return safeAverageColor(stats, '#7E86C2')
+}
+
+function mergeTraceLayersToTargetCount(layers = [], targetCount = 1) {
+  const desired = Math.max(1, Math.min(15, Math.round(targetCount || 1)))
+  let working = (Array.isArray(layers) ? layers : [])
+    .filter((layer) => layer?.imageData)
+    .map((layer, index) => ({
+      ...layer,
+      index,
+      pixelCount: Number.isFinite(layer?.pixelCount) ? Number(layer.pixelCount) : countFilledPixels(layer.imageData),
+    }))
+
+  if (working.length <= desired) return working.map((layer, index) => ({ ...layer, index }))
+
+  while (working.length > desired) {
+    let pairA = 0
+    let pairB = 1
+    let bestDistance = Number.POSITIVE_INFINITY
+    for (let i = 0; i < working.length; i += 1) {
+      for (let j = i + 1; j < working.length; j += 1) {
+        const d = colorDistance(working[i].colorHex || '#7E86C2', working[j].colorHex || '#7E86C2')
+        if (d < bestDistance) {
+          bestDistance = d
+          pairA = i
+          pairB = j
+        }
+      }
+    }
+
+    const a = working[pairA]
+    const b = working[pairB]
+    const mergedImageData = combineBinaryLayerImageData([a, b]) || a.imageData
+    const aRgb = hexToRgb(a.colorHex || '#7E86C2') || { r: 126, g: 134, b: 194 }
+    const bRgb = hexToRgb(b.colorHex || '#7E86C2') || { r: 126, g: 134, b: 194 }
+    const aWeight = Math.max(1, Number(a.pixelCount) || 1)
+    const bWeight = Math.max(1, Number(b.pixelCount) || 1)
+    const total = aWeight + bWeight
+    const mergedColor = rgbToHex(
+      (aRgb.r * aWeight + bRgb.r * bWeight) / total,
+      (aRgb.g * aWeight + bRgb.g * bWeight) / total,
+      (aRgb.b * aWeight + bRgb.b * bWeight) / total,
+    )
+
+    const mergedLayer = {
+      ...a,
+      imageData: mergedImageData,
+      colorHex: mergedColor,
+      pixelCount: countFilledPixels(mergedImageData),
+      hint: a.hint || b.hint || `Trace cluster ${pairA + 1}`,
+    }
+
+    const next = []
+    for (let i = 0; i < working.length; i += 1) {
+      if (i === pairA || i === pairB) continue
+      next.push(working[i])
+    }
+    next.push(mergedLayer)
+    working = next
+  }
+
+  return working
+    .sort((a, b) => {
+      const al = hexToHsl(a.colorHex)?.l ?? 50
+      const bl = hexToHsl(b.colorHex)?.l ?? 50
+      return bl - al
+    })
+    .map((layer, index) => ({ ...layer, index }))
 }
 
 function getSvgViewBox(svgElement) {
@@ -4559,9 +4637,12 @@ function StencilStudioPanel({
               {isTraceGenerator ? (
                 <div className="space-y-3 rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                      Detected Colors ({detectedTraceCount})
-                    </p>
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                        Detected Colors ({detectedTraceCount})
+                      </p>
+                      <p className="text-[10px] text-[#8b7b6b]">Detected palette only. Output count comes from the Layers slider.</p>
+                    </div>
                     <button
                       type="button"
                       onClick={() => onUpdateSetting('layerCount', Math.max(1, Math.min(15, detectedTraceCount || 1)))}
@@ -5898,14 +5979,20 @@ function App() {
       const rotationDeg = autoRotationDeg + Number(stencilSettings.straightenAdjust || 0)
       setStencilStraightenAngle(rotationDeg)
       if (generatorType === 'trace') {
-        const tracedLayers = createTraceStyleStencilLayers(image, {
-          layerCount: stencilSettings.layerCount,
+        const desiredTraceLayerCount = Math.max(1, Math.min(15, Math.round(Number(stencilSettings.layerCount) || 1)))
+        const detectedTraceLayerCount = Math.max(
+          desiredTraceLayerCount,
+          Math.min(15, Number(Array.isArray(traceDetectedColors) ? traceDetectedColors.length : 0) || 0),
+        )
+        const rawTraceLayers = createTraceStyleStencilLayers(image, {
+          layerCount: detectedTraceLayerCount,
           detail: stencilSettings.detail,
           rotationDeg,
           rectifyEnabled: stencilRectifyEnabled,
           rectifyCorners: stencilRectifyCorners,
           seedHexColors: stencilSettings.traceExtraColors || [],
         })
+        const tracedLayers = mergeTraceLayersToTargetCount(rawTraceLayers, desiredTraceLayerCount)
         const layerSvgs = tracedLayers.map((layer) => {
           const rawSvg = buildStencilSvg(layer.imageData, {
             ...stencilSettings,
