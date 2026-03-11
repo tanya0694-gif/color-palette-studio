@@ -2680,54 +2680,20 @@ function buildPlateCutSvg(
   const sourceSvg = parsed.querySelector('svg')
   if (!sourceSvg) return layerSvg
   const { minX, minY, width, height } = getSvgViewBox(sourceSvg)
-  const cutNodes = [...sourceSvg.children].filter(
-    (child) => child.nodeType === 1 && child.tagName?.toLowerCase() !== 'defs',
-  )
-  if (!cutNodes.length) return layerSvg
+  const cutPaths = [...sourceSvg.querySelectorAll('path')]
+    .map((path) => String(path.getAttribute('d') || '').trim())
+    .filter(Boolean)
+  if (!cutPaths.length) return layerSvg
   const outputDoc = document.implementation.createDocument('http://www.w3.org/2000/svg', 'svg', null)
   const outputSvg = outputDoc.documentElement
   outputSvg.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
   outputSvg.setAttribute('viewBox', `${minX} ${minY} ${width} ${height}`)
-  const maskId = `plate-cut-mask-${Math.random().toString(36).slice(2, 10)}`
-  const defs = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'defs')
-  const mask = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'mask')
-  mask.setAttribute('id', maskId)
-  mask.setAttribute('maskUnits', 'userSpaceOnUse')
-  mask.setAttribute('x', String(minX))
-  mask.setAttribute('y', String(minY))
-  mask.setAttribute('width', String(width))
-  mask.setAttribute('height', String(height))
-
-  const maskBase = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'rect')
-  maskBase.setAttribute('x', String(minX))
-  maskBase.setAttribute('y', String(minY))
-  maskBase.setAttribute('width', String(width))
-  maskBase.setAttribute('height', String(height))
-  maskBase.setAttribute('fill', '#ffffff')
-  mask.appendChild(maskBase)
-
-  cutNodes.forEach((node) => {
-    const imported = outputDoc.importNode(node, true)
-    ;[imported, ...imported.querySelectorAll?.('*')].forEach((el) => {
-      if (!el || typeof el.setAttribute !== 'function') return
-      const tag = String(el.tagName || '').toLowerCase()
-      if (tag === 'g') return
-      el.setAttribute('fill', '#000000')
-      if (el.hasAttribute('stroke')) {
-        el.setAttribute('stroke', '#000000')
-      }
-    })
-    mask.appendChild(imported)
-  })
-
-  defs.appendChild(mask)
-  outputSvg.appendChild(defs)
-
   const platePath = buildPlatePath({ minX, minY, width, height, shape, margin })
   const plate = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'path')
-  plate.setAttribute('d', platePath)
+  plate.setAttribute('d', `${platePath} ${cutPaths.join(' ')}`.trim())
   plate.setAttribute('fill', normalizeHex(fillColor) || '#111111')
-  plate.setAttribute('mask', `url(#${maskId})`)
+  plate.setAttribute('fill-rule', 'evenodd')
+  plate.setAttribute('clip-rule', 'evenodd')
   outputSvg.appendChild(plate)
   return new XMLSerializer().serializeToString(outputSvg)
 }
