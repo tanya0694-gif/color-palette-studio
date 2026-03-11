@@ -30,6 +30,14 @@ function uid() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
+function toSafeFileBaseName(value, fallback = 'Stencil Layer') {
+  const raw = String(value || '').trim() || fallback
+  return raw
+    .replace(/[\\/:*?"<>|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 const DEFAULT_COLOR = () => ({
   id: uid(),
   name: '',
@@ -3854,6 +3862,7 @@ function StencilStudioPanel({
   onGenerate,
   onDownloadSvg,
   onDownloadLayerSvg,
+  onDownloadAllLayers,
   onMergeLayers,
   onRemoveLayerAndFill,
   onAutoGroupByTone,
@@ -5311,9 +5320,7 @@ function StencilStudioPanel({
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    stencilLayers.forEach((layer, orderIndex) => onDownloadLayerSvg(layer, orderIndex + 1))
-                  }}
+                  onClick={() => (onDownloadAllLayers ? onDownloadAllLayers() : stencilLayers.forEach((layer, orderIndex) => onDownloadLayerSvg(layer, orderIndex + 1)))}
                   className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd]"
                 >
                   Download All Layers
@@ -6427,25 +6434,28 @@ function App() {
     window.setTimeout(() => URL.revokeObjectURL(url), 3000)
   }
 
-  function downloadStencilLayerSvg(layerInput, layerNumberOverride = null) {
+  function downloadStencilLayerSvg(layerInput, layerNumberOverride = null, options = {}) {
     const layer =
       layerInput && typeof layerInput === 'object'
         ? layerInput
         : stencilLayers.find((entry) => entry.index === layerInput)
     if (!layer?.svg) return
+    const batchOffset = Math.max(0, Number(options?.batchOffset) || 0)
+    const clickDelay = Math.max(80, Number(options?.clickDelay) || 120)
     const resolvedIndex = stencilLayers.findIndex((entry) => entry.index === layer.index)
     const layerNumber = Number.isFinite(Number(layerNumberOverride))
       ? Number(layerNumberOverride)
       : resolvedIndex >= 0
         ? resolvedIndex + 1
         : Number(layer.index) + 1
+    const safeBaseName = toSafeFileBaseName(layer.name || `Stencil Layer ${layerNumber}`, `Stencil Layer ${layerNumber}`)
     const parts = []
     const mode = stencilSettings.exportContent || 'elements'
     if (mode === 'elements' || mode === 'both') {
       parts.push({
         suffix: 'elements',
         svg: tintStencilSvg(layer.svg, layer.colorHex || '#111111'),
-        fileName: `Stencil Elements ${layerNumber}.svg`,
+        fileName: `${safeBaseName} - Elements.svg`,
       })
     }
     if (mode === 'plate' || mode === 'both') {
@@ -6456,19 +6466,29 @@ function App() {
           margin: stencilSettings.plateMargin ?? 0.08,
           fillColor: layer.colorHex || '#111111',
         }),
-        fileName: `Stencil Plate ${layerNumber}.svg`,
+        fileName: `${safeBaseName} - Plate.svg`,
       })
     }
-    parts.forEach((part) => {
+    parts.forEach((part, partIndex) => {
       const blob = new Blob([part.svg], { type: 'image/svg+xml;charset=utf-8' })
       const url = URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = part.fileName || `Stencil Layer ${layerNumber}.svg`
-      document.body.appendChild(anchor)
-      anchor.click()
-      document.body.removeChild(anchor)
-      window.setTimeout(() => URL.revokeObjectURL(url), 3000)
+      const delay = batchOffset + partIndex * clickDelay
+      window.setTimeout(() => {
+        const anchor = document.createElement('a')
+        anchor.href = url
+        anchor.download = part.fileName || `${safeBaseName}.svg`
+        document.body.appendChild(anchor)
+        anchor.click()
+        document.body.removeChild(anchor)
+      }, delay)
+      window.setTimeout(() => URL.revokeObjectURL(url), delay + 4000)
+    })
+  }
+
+  function downloadAllStencilLayerSvgs() {
+    const perLayerDelay = 260
+    stencilLayers.forEach((layer, orderIndex) => {
+      downloadStencilLayerSvg(layer, orderIndex + 1, { batchOffset: orderIndex * perLayerDelay })
     })
   }
 
@@ -7742,6 +7762,7 @@ function App() {
           onGenerate={() => void generateStencilFromImage()}
           onDownloadSvg={downloadStencilSvg}
           onDownloadLayerSvg={downloadStencilLayerSvg}
+          onDownloadAllLayers={downloadAllStencilLayerSvgs}
           onMergeLayers={combineStencilLayers}
           onRemoveLayerAndFill={removeStencilLayerAndFill}
           onAutoGroupByTone={autoGroupStencilLayersByTone}
