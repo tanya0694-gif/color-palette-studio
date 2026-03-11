@@ -2425,15 +2425,28 @@ function averageColorFromLayers(layers = []) {
   return safeAverageColor(stats, '#7E86C2')
 }
 
-function splitLayersIntoToneBuckets(layers = []) {
+function splitLayersIntoToneBuckets(layers = [], overrides = {}) {
+  const validBuckets = new Set(['light', 'mid', 'dark', 'foliageLight', 'foliageDark'])
+  const manualBuckets = { light: [], mid: [], dark: [], foliage: [], foliageLight: [], foliageDark: [] }
   const isGreenFamily = (hex) => {
     const hsl = hexToHsl(hex || '#7E86C2') || { h: 0, s: 0, l: 50 }
     return hsl.s >= 14 && hsl.h >= 75 && hsl.h <= 170
   }
 
   const normalized = (Array.isArray(layers) ? layers : []).filter((layer) => layer && layer.colorHex)
-  const foliage = normalized.filter((layer) => isGreenFamily(layer.colorHex))
-  const nonFoliage = normalized.filter((layer) => !isGreenFamily(layer.colorHex))
+  const remaining = []
+  normalized.forEach((layer) => {
+    const key = String(layer?.index)
+    const manual = String(overrides?.[key] || '')
+    if (validBuckets.has(manual)) {
+      manualBuckets[manual].push(layer)
+    } else {
+      remaining.push(layer)
+    }
+  })
+
+  const foliage = remaining.filter((layer) => isGreenFamily(layer.colorHex))
+  const nonFoliage = remaining.filter((layer) => !isGreenFamily(layer.colorHex))
   const foliageByLightness = foliage
     .map((layer) => ({
       layer,
@@ -2451,18 +2464,27 @@ function splitLayersIntoToneBuckets(layers = []) {
       lightness: hexToHsl(layer.colorHex)?.l ?? 50,
     }))
     .sort((a, b) => b.lightness - a.lightness)
-  if (!withLightness.length) return { light: [], mid: [], dark: [], foliage, foliageLight, foliageDark }
+  if (!withLightness.length) {
+    return {
+      light: manualBuckets.light,
+      mid: manualBuckets.mid,
+      dark: manualBuckets.dark,
+      foliage: [...manualBuckets.foliage, ...manualBuckets.foliageLight, ...manualBuckets.foliageDark, ...foliage],
+      foliageLight: [...manualBuckets.foliageLight, ...foliageLight],
+      foliageDark: [...manualBuckets.foliageDark, ...foliageDark],
+    }
+  }
 
   const total = withLightness.length
   const lightEnd = Math.max(1, Math.round(total / 3))
   const midEnd = Math.max(lightEnd + 1, Math.round((total * 2) / 3))
   return {
-    light: withLightness.slice(0, lightEnd).map((entry) => entry.layer),
-    mid: withLightness.slice(lightEnd, midEnd).map((entry) => entry.layer),
-    dark: withLightness.slice(midEnd).map((entry) => entry.layer),
-    foliage,
-    foliageLight,
-    foliageDark,
+    light: [...manualBuckets.light, ...withLightness.slice(0, lightEnd).map((entry) => entry.layer)],
+    mid: [...manualBuckets.mid, ...withLightness.slice(lightEnd, midEnd).map((entry) => entry.layer)],
+    dark: [...manualBuckets.dark, ...withLightness.slice(midEnd).map((entry) => entry.layer)],
+    foliage: [...manualBuckets.foliage, ...manualBuckets.foliageLight, ...manualBuckets.foliageDark, ...foliage],
+    foliageLight: [...manualBuckets.foliageLight, ...foliageLight],
+    foliageDark: [...manualBuckets.foliageDark, ...foliageDark],
   }
 }
 
@@ -3854,6 +3876,7 @@ function StencilStudioPanel({
   const [focusedLayerKey, setFocusedLayerKey] = useState(null)
   const [focusedToneGroup, setFocusedToneGroup] = useState('none')
   const [layerPreviewMode, setLayerPreviewMode] = useState('elements')
+  const [toneOverrides, setToneOverrides] = useState({})
   const vectorPanStateRef = useRef(null)
   const previewImageRef = useRef(null)
   const splitSamplerCanvasRef = useRef(null)
@@ -3870,7 +3893,7 @@ function StencilStudioPanel({
     () => stencilLayers.find((layer) => String(layer?.index) === String(focusedLayerKey)) || null,
     [stencilLayers, focusedLayerKey],
   )
-  const toneBuckets = useMemo(() => splitLayersIntoToneBuckets(stencilLayers), [stencilLayers])
+  const toneBuckets = useMemo(() => splitLayersIntoToneBuckets(stencilLayers, toneOverrides), [stencilLayers, toneOverrides])
   const focusedToneSvg = useMemo(() => {
     if (focusedToneGroup === 'foliageLight')
       return buildCompositeLayerPreview(toneBuckets.foliageLight || [], { useLayerColor: true })
@@ -3927,6 +3950,7 @@ function StencilStudioPanel({
   }, [stencilLayers, focusedLayerKey])
   useEffect(() => {
     setFocusedToneGroup('none')
+    setToneOverrides({})
   }, [stencilLayers])
 
   function layerKey(layer) {
@@ -5271,7 +5295,7 @@ function StencilStudioPanel({
                 </button>
                 <button
                   type="button"
-                  onClick={() => onAutoGroupByTone?.()}
+                  onClick={() => onAutoGroupByTone?.(toneOverrides)}
                   disabled={stencilLayers.length < 3}
                   className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd] disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -5342,6 +5366,30 @@ function StencilStudioPanel({
                     />
                     <span className="text-[11px] text-[#7f7468]">{layer.colorHex || '#7E86C2'}</span>
                   </div>
+                  <label className="mb-2 block text-[11px] text-[#6b5b4f]">
+                    Tone Group
+                    <select
+                      value={toneOverrides[String(layer.index)] || ''}
+                      onChange={(e) =>
+                        setToneOverrides((prev) => {
+                          const key = String(layer.index)
+                          const next = { ...prev }
+                          const value = String(e.target.value || '')
+                          if (!value) delete next[key]
+                          else next[key] = value
+                          return next
+                        })
+                      }
+                      className="mt-1 h-8 w-full rounded border border-[#d9cfc4] bg-white px-2 text-[11px] text-[#5f5276]"
+                    >
+                      <option value="">Auto</option>
+                      <option value="light">Flower Light</option>
+                      <option value="mid">Flower Mid</option>
+                      <option value="dark">Flower Dark</option>
+                      <option value="foliageLight">Foliage Light</option>
+                      <option value="foliageDark">Foliage Dark</option>
+                    </select>
+                  </label>
                   <button
                     type="button"
                     onClick={() => onDownloadLayerSvg(layer, orderIndex + 1)}
@@ -6471,14 +6519,14 @@ function App() {
     setStencilLayers((prev) => [...prev, mergedLayer])
   }
 
-  function autoGroupStencilLayersByTone() {
+  function autoGroupStencilLayersByTone(overrides = {}) {
     setStencilLayers((prev) => {
       const eligible = prev.filter((layer) => layer?.imageData && layer?.svg)
       if (eligible.length < 3) {
         alert('Need at least 3 generated layers to auto-group by tone.')
         return prev
       }
-      const buckets = splitLayersIntoToneBuckets(eligible)
+      const buckets = splitLayersIntoToneBuckets(eligible, overrides)
       const entries = [
         { key: 'foliageLight', label: 'Foliage Light Plate', layers: buckets.foliageLight || [] },
         { key: 'foliageDark', label: 'Foliage Dark Plate', layers: buckets.foliageDark || [] },
