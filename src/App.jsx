@@ -3811,6 +3811,8 @@ function StencilStudioPanel({
   const [selectedLayerKeys, setSelectedLayerKeys] = useState([])
   const [focusedLayerKey, setFocusedLayerKey] = useState(null)
   const [layerPreviewMode, setLayerPreviewMode] = useState('elements')
+  const [showSourceOverlay, setShowSourceOverlay] = useState(true)
+  const [sourceOverlayOpacity, setSourceOverlayOpacity] = useState(35)
   const vectorPanStateRef = useRef(null)
   const previewImageRef = useRef(null)
   const splitSamplerCanvasRef = useRef(null)
@@ -4690,14 +4692,56 @@ function StencilStudioPanel({
                     <span>Layers ({stencilSettings.layerCount})</span>
                     <HelpTip text="Number of light-to-dark stencil layers. More layers create smoother tonal transitions." />
                   </div>
-                  <input
-                    type="range"
-                    min={1}
-                    max={15}
-                    value={stencilSettings.layerCount}
-                    onChange={(e) => onUpdateSetting('layerCount', Number(e.target.value))}
-                    className="w-full accent-[#9678b8]"
-                  />
+                  <div className="mb-2 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('layerCount', Math.max(1, Number(stencilSettings.layerCount || 1) - 1))}
+                      className="h-8 w-8 rounded-md border border-[#d7c7ee] bg-white text-sm font-semibold text-[#5e4a7f] hover:bg-[#f6f0ff]"
+                      title="Decrease layers"
+                    >
+                      −
+                    </button>
+                    <input
+                      type="number"
+                      min={1}
+                      max={15}
+                      value={stencilSettings.layerCount}
+                      onChange={(e) => onUpdateSetting('layerCount', Number.parseInt(e.target.value || '1', 10) || 1)}
+                      className="h-8 w-20 rounded-md border border-[#d9cfc4] bg-white px-2 text-center text-sm font-semibold text-[#5e4a7f]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSetting('layerCount', Math.min(15, Number(stencilSettings.layerCount || 1) + 1))}
+                      className="h-8 w-8 rounded-md border border-[#d7c7ee] bg-white text-sm font-semibold text-[#5e4a7f] hover:bg-[#f6f0ff]"
+                      title="Increase layers"
+                    >
+                      +
+                    </button>
+                    <input
+                      type="range"
+                      min={1}
+                      max={15}
+                      value={stencilSettings.layerCount}
+                      onChange={(e) => onUpdateSetting('layerCount', Number(e.target.value))}
+                      className="ml-1 w-full accent-[#9678b8]"
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[8, 10, 12, 15].map((count) => (
+                      <button
+                        key={`layers-preset-${count}`}
+                        type="button"
+                        onClick={() => onUpdateSetting('layerCount', count)}
+                        className={`rounded-md border px-2 py-1 text-[11px] font-medium ${
+                          Number(stencilSettings.layerCount) === count
+                            ? 'border-[#9c82c0] bg-white text-[#4f3e6b]'
+                            : 'border-[#d7c7ee] bg-[#fcf9ff] text-[#6b5b4f] hover:bg-white'
+                        }`}
+                      >
+                        {count}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               ) : null}
 
@@ -5035,6 +5079,31 @@ function StencilStudioPanel({
                   </button>
                 </div>
               ) : null}
+              {stencilImagePreviewUrl ? (
+                <div className="ml-1 inline-flex items-center gap-1 rounded-md border border-[#d7c7ee] bg-white p-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowSourceOverlay((value) => !value)}
+                    className={`rounded px-2 py-1 text-[10px] font-semibold ${
+                      showSourceOverlay ? 'bg-[#a58bc4] text-[#3f3254]' : 'text-[#5f5276] hover:bg-[#f5effd]'
+                    }`}
+                    title="Overlay source image under vectors"
+                  >
+                    {showSourceOverlay ? 'Overlay On' : 'Overlay Off'}
+                  </button>
+                  {showSourceOverlay ? (
+                    <input
+                      type="range"
+                      min={10}
+                      max={80}
+                      value={sourceOverlayOpacity}
+                      onChange={(e) => setSourceOverlayOpacity(Number(e.target.value))}
+                      className="w-20 accent-[#9678b8]"
+                      title="Overlay opacity"
+                    />
+                  ) : null}
+                </div>
+              ) : null}
             </div>
             <p className="text-xs text-[#9a8d80]">
               {focusedLayer
@@ -5070,7 +5139,7 @@ function StencilStudioPanel({
             >
               <div className="flex h-full min-h-full w-full min-w-full items-center justify-center overflow-visible">
                 <div
-                  className="[&_svg]:!overflow-visible [&_svg]:h-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:w-full"
+                  className="relative [&_svg]:!overflow-visible [&_svg]:h-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:w-full"
                   style={{
                     width: '100%',
                     height: '100%',
@@ -5079,8 +5148,17 @@ function StencilStudioPanel({
                     transformOrigin: 'center center',
                     willChange: 'transform',
                   }}
-                  dangerouslySetInnerHTML={{ __html: displayVectorSvg }}
-                />
+                >
+                  {showSourceOverlay && stencilImagePreviewUrl ? (
+                    <img
+                      src={stencilImagePreviewUrl}
+                      alt="Source overlay"
+                      className="absolute inset-0 h-full w-full object-contain"
+                      style={{ opacity: sourceOverlayOpacity / 100, pointerEvents: 'none' }}
+                    />
+                  ) : null}
+                  <div className="relative z-10 h-full w-full" dangerouslySetInnerHTML={{ __html: displayVectorSvg }} />
+                </div>
               </div>
             </div>
           ) : (
