@@ -3664,6 +3664,8 @@ function StencilStudioPanel({
   const [vectorPan, setVectorPan] = useState({ x: 0, y: 0 })
   const [pendingSplitColorField, setPendingSplitColorField] = useState(null)
   const [selectedLayerKeys, setSelectedLayerKeys] = useState([])
+  const [focusedLayerKey, setFocusedLayerKey] = useState(null)
+  const [layerPreviewMode, setLayerPreviewMode] = useState('elements')
   const vectorPanStateRef = useRef(null)
   const previewImageRef = useRef(null)
   const splitSamplerCanvasRef = useRef(null)
@@ -3676,8 +3678,14 @@ function StencilStudioPanel({
     () => buildCompositeLayerPreview(stencilLayers, { useLayerColor: false }),
     [stencilLayers],
   )
+  const focusedLayer = useMemo(
+    () => stencilLayers.find((layer) => String(layer?.index) === String(focusedLayerKey)) || null,
+    [stencilLayers, focusedLayerKey],
+  )
   const activeVectorSvg =
-    vectorPreviewMode === 'stacked'
+    focusedLayer?.svg
+      ? tintStencilSvg(focusedLayer.svg, focusedLayer.colorHex || '#111111')
+      : vectorPreviewMode === 'stacked'
       ? compositePreviewSvg || stencilSvg
       : cutPreviewSvg || stencilSvg || compositePreviewSvg
   const displayVectorSvg = useMemo(() => fitSvgForDisplay(activeVectorSvg), [activeVectorSvg])
@@ -3709,6 +3717,12 @@ function StencilStudioPanel({
   useEffect(() => {
     setSelectedLayerKeys([])
   }, [stencilLayers])
+
+  useEffect(() => {
+    if (!focusedLayerKey) return
+    const exists = stencilLayers.some((layer) => String(layer?.index) === String(focusedLayerKey))
+    if (!exists) setFocusedLayerKey(null)
+  }, [stencilLayers, focusedLayerKey])
 
   function layerKey(layer) {
     return String(layer?.index)
@@ -4804,6 +4818,15 @@ function StencilStudioPanel({
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Vector Output</p>
+              {focusedLayer ? (
+                <button
+                  type="button"
+                  onClick={() => setFocusedLayerKey(null)}
+                  className="rounded-md border border-[#d7c7ee] bg-white px-2 py-1 text-[10px] font-semibold text-[#5f5276] hover:bg-[#f5effd]"
+                >
+                  Clear Focus ({focusedLayer.name || `Layer ${focusedLayer.index + 1}`})
+                </button>
+              ) : null}
               {stencilLayers.length > 0 ? (
                 <div className="inline-flex rounded-md border border-[#d7c7ee] bg-[#f4eefc] p-1">
                   <button
@@ -4866,7 +4889,9 @@ function StencilStudioPanel({
               ) : null}
             </div>
             <p className="text-xs text-[#9a8d80]">
-              {normalizedGenerator === 'auto'
+              {focusedLayer
+                ? `Focused on ${focusedLayer.name || `Layer ${focusedLayer.index + 1}`} in vector preview.`
+                : normalizedGenerator === 'auto'
                 ? `${stencilLayers.length} auto-separated layers generated.`
                 : normalizedGenerator === 'trace'
                 ? `${stencilLayers.length} trace-style color layers generated.`
@@ -4931,6 +4956,26 @@ function StencilStudioPanel({
                     </>
                   ) : null}
                 </p>
+                <div className="mt-2 inline-flex rounded-md border border-[#d7c7ee] bg-[#f4eefc] p-1">
+                  <button
+                    type="button"
+                    onClick={() => setLayerPreviewMode('elements')}
+                    className={`rounded px-2 py-1 text-[10px] font-semibold ${
+                      layerPreviewMode === 'elements' ? 'bg-[#a58bc4] text-[#3f3254]' : 'text-[#5f5276] hover:bg-white'
+                    }`}
+                  >
+                    Elements Preview
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLayerPreviewMode('plate')}
+                    className={`rounded px-2 py-1 text-[10px] font-semibold ${
+                      layerPreviewMode === 'plate' ? 'bg-[#a58bc4] text-[#3f3254]' : 'text-[#5f5276] hover:bg-white'
+                    }`}
+                  >
+                    Plate Preview
+                  </button>
+                </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -4978,7 +5023,16 @@ function StencilStudioPanel({
                     <div
                       className="mb-2 h-36 w-full overflow-hidden rounded-md border border-[#eee5db] bg-white p-1 [&_svg]:h-full [&_svg]:w-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:!overflow-visible"
                       dangerouslySetInnerHTML={{
-                        __html: fitSvgForDisplay(tintStencilSvg(layer.svg, layer.colorHex || '#7E86C2')),
+                        __html:
+                          layerPreviewMode === 'plate'
+                            ? fitSvgForDisplay(
+                                buildPlateCutSvg(layer.svg, {
+                                  shape: stencilSettings.plateShape || 'rectangle',
+                                  margin: stencilSettings.plateMargin ?? 0.08,
+                                  fillColor: layer.colorHex || '#111111',
+                                }),
+                              )
+                            : fitSvgForDisplay(tintStencilSvg(layer.svg, layer.colorHex || '#7E86C2')),
                       }}
                     />
                   ) : (
@@ -5003,6 +5057,15 @@ function StencilStudioPanel({
                     className="w-full rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
                   >
                     {isAutoGenerator || isTraceGenerator ? layerDownloadLabel : 'Download Layer SVG'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFocusedLayerKey((prev) => (String(prev) === String(layer.index) ? null : String(layer.index)))
+                    }
+                    className="mt-2 w-full rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd]"
+                  >
+                    {String(focusedLayerKey) === String(layer.index) ? 'Unfocus In Vector Output' : 'Focus In Vector Output'}
                   </button>
                   <button
                     type="button"
@@ -5789,8 +5852,12 @@ function App() {
       if (field === 'traceExtraColors') {
         const cleaned = [...new Set((Array.isArray(value) ? value : []).map((hex) => normalizeHex(hex)).filter(Boolean))]
         next.traceExtraColors = cleaned
-        if (cleaned.length > next.layerCount) {
-          next.layerCount = Math.min(15, cleaned.length)
+      }
+      if (field === 'layerCount') {
+        const numeric = Number(value)
+        next.layerCount = Math.max(1, Math.min(15, Number.isFinite(numeric) ? numeric : 1))
+        if (Array.isArray(next.traceExtraColors) && next.traceExtraColors.length > next.layerCount) {
+          next.traceExtraColors = next.traceExtraColors.slice(0, next.layerCount)
         }
       }
       return next
