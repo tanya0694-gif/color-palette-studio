@@ -5840,7 +5840,10 @@ function App() {
           seedHexColors: stencilSettings.traceExtraColors || [],
         })
         const layerSvgs = tracedLayers.map((layer) => {
-          const rawSvg = buildStencilSvg(layer.imageData, { ...stencilSettings, noiseFilter: 1 })
+          const rawSvg = buildStencilSvg(layer.imageData, {
+            ...stencilSettings,
+            noiseFilter: Math.max(10, Number(stencilSettings.noiseFilter || 0)),
+          })
           const svg = wrapSvgForStencilCanvas(rawSvg, {
             paperSize: stencilSettings.paperSize,
             orientation: stencilSettings.orientation,
@@ -5908,7 +5911,10 @@ function App() {
               })
         const layerSvgs = pairLayers.map((layer) => {
           const isColorSplit = stencilSettings.outlineSource === 'colorSplit'
-          const rawSvg = buildStencilSvg(layer.imageData, { ...stencilSettings, noiseFilter: 1 })
+          const rawSvg = buildStencilSvg(layer.imageData, {
+            ...stencilSettings,
+            noiseFilter: Math.max(10, Number(stencilSettings.noiseFilter || 0)),
+          })
           const svg = wrapSvgForStencilCanvas(rawSvg, {
             paperSize: stencilSettings.paperSize,
             orientation: stencilSettings.orientation,
@@ -6063,7 +6069,10 @@ function App() {
       return
     }
 
-    const rawSvg = buildStencilSvg(combinedImageData, { ...stencilSettings, noiseFilter: 1 })
+    const rawSvg = buildStencilSvg(combinedImageData, {
+      ...stencilSettings,
+      noiseFilter: Math.max(10, Number(stencilSettings.noiseFilter || 0)),
+    })
     const svg = wrapSvgForStencilCanvas(rawSvg, {
       paperSize: stencilSettings.paperSize,
       orientation: stencilSettings.orientation,
@@ -6129,7 +6138,10 @@ function App() {
         return prev
       }
 
-      const rawSvg = buildStencilSvg(mergedImageData, { ...stencilSettings, noiseFilter: 1 })
+      const rawSvg = buildStencilSvg(mergedImageData, {
+        ...stencilSettings,
+        noiseFilter: Math.max(10, Number(stencilSettings.noiseFilter || 0)),
+      })
       const svg = wrapSvgForStencilCanvas(rawSvg, {
         paperSize: stencilSettings.paperSize,
         orientation: stencilSettings.orientation,
