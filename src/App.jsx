@@ -1537,22 +1537,21 @@ function createTraceStyleStencilLayers(
   const cleanupStrength = Math.max(0, Math.min(30, Number(noiseFilter) || 0))
   const output = layers
     .map((layer) => {
-      smoothBinaryMask(layer.imageData, 1)
-      dilateBinaryMask(layer.imageData, 1)
-      erodeBinaryMask(layer.imageData, 1)
+      const morphPasses = cleanupStrength >= 16 ? 1 : 0
+      if (morphPasses > 0) {
+        smoothBinaryMask(layer.imageData, morphPasses)
+        dilateBinaryMask(layer.imageData, 1)
+        erodeBinaryMask(layer.imageData, 1)
+      }
       removeSmallBinaryComponents(
         layer.imageData,
-        Math.max(4, Math.floor((width * height) / (90000 - cleanupStrength * 1200))),
+        Math.max(2, Math.floor((width * height) / (240000 - cleanupStrength * 2500))),
         128,
-        0.00045,
+        0.00008,
       )
-      fillSmallBinaryHoles(layer.imageData, Math.max(6, Math.floor((width * height) / (130000 - cleanupStrength * 1700))))
-      // Extra anti-dust pass for trace output: removes isolated flecks that remain after clustering.
-      removeSmallBinaryComponents(
+      fillSmallBinaryHoles(
         layer.imageData,
-        Math.max(10, Math.floor((width * height) / (42000 - cleanupStrength * 500))),
-        128,
-        0.0015,
+        Math.max(12, Math.floor((width * height) / (90000 - cleanupStrength * 1200))),
       )
       const colorHex = safeAverageColor(layer.colorStats, '#7E86C2')
       return {
