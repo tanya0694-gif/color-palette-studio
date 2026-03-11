@@ -2434,6 +2434,15 @@ function splitLayersIntoToneBuckets(layers = []) {
   const normalized = (Array.isArray(layers) ? layers : []).filter((layer) => layer && layer.colorHex)
   const foliage = normalized.filter((layer) => isGreenFamily(layer.colorHex))
   const nonFoliage = normalized.filter((layer) => !isGreenFamily(layer.colorHex))
+  const foliageByLightness = foliage
+    .map((layer) => ({
+      layer,
+      lightness: hexToHsl(layer.colorHex)?.l ?? 50,
+    }))
+    .sort((a, b) => b.lightness - a.lightness)
+  const foliageSplit = Math.max(1, Math.round(foliageByLightness.length / 2))
+  const foliageLight = foliageByLightness.slice(0, foliageSplit).map((entry) => entry.layer)
+  const foliageDark = foliageByLightness.slice(foliageSplit).map((entry) => entry.layer)
 
   const withLightness = nonFoliage
     .filter((layer) => layer && layer.colorHex)
@@ -2442,7 +2451,7 @@ function splitLayersIntoToneBuckets(layers = []) {
       lightness: hexToHsl(layer.colorHex)?.l ?? 50,
     }))
     .sort((a, b) => b.lightness - a.lightness)
-  if (!withLightness.length) return { light: [], mid: [], dark: [], foliage }
+  if (!withLightness.length) return { light: [], mid: [], dark: [], foliage, foliageLight, foliageDark }
 
   const total = withLightness.length
   const lightEnd = Math.max(1, Math.round(total / 3))
@@ -2452,6 +2461,8 @@ function splitLayersIntoToneBuckets(layers = []) {
     mid: withLightness.slice(lightEnd, midEnd).map((entry) => entry.layer),
     dark: withLightness.slice(midEnd).map((entry) => entry.layer),
     foliage,
+    foliageLight,
+    foliageDark,
   }
 }
 
@@ -3861,6 +3872,10 @@ function StencilStudioPanel({
   )
   const toneBuckets = useMemo(() => splitLayersIntoToneBuckets(stencilLayers), [stencilLayers])
   const focusedToneSvg = useMemo(() => {
+    if (focusedToneGroup === 'foliageLight')
+      return buildCompositeLayerPreview(toneBuckets.foliageLight || [], { useLayerColor: true })
+    if (focusedToneGroup === 'foliageDark')
+      return buildCompositeLayerPreview(toneBuckets.foliageDark || [], { useLayerColor: true })
     if (focusedToneGroup === 'foliage') return buildCompositeLayerPreview(toneBuckets.foliage, { useLayerColor: true })
     if (focusedToneGroup === 'light') return buildCompositeLayerPreview(toneBuckets.light, { useLayerColor: true })
     if (focusedToneGroup === 'mid') return buildCompositeLayerPreview(toneBuckets.mid, { useLayerColor: true })
@@ -5063,26 +5078,22 @@ function StencilStudioPanel({
                 </button>
               ) : null}
               {stencilLayers.length >= 3 ? (
-                <div className="inline-flex rounded-md border border-[#d7c7ee] bg-[#f4eefc] p-1">
-                  {[
-                    { key: 'none', label: 'All' },
-                    { key: 'foliage', label: 'Foliage' },
-                    { key: 'light', label: 'Light' },
-                    { key: 'mid', label: 'Mid' },
-                    { key: 'dark', label: 'Dark' },
-                  ].map((entry) => (
-                    <button
-                      key={`tone-focus-${entry.key}`}
-                      type="button"
-                      onClick={() => setFocusedToneGroup(entry.key)}
-                      className={`rounded px-2 py-1 text-[10px] font-semibold ${
-                        focusedToneGroup === entry.key ? 'bg-[#a58bc4] text-[#3f3254]' : 'text-[#5f5276] hover:bg-white'
-                      }`}
-                    >
-                      {entry.label}
-                    </button>
-                  ))}
-                </div>
+                <label className="flex items-center gap-1 rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-2 py-1">
+                  <span className="text-[10px] font-semibold text-[#5f5276]">Focus</span>
+                  <select
+                    value={focusedToneGroup}
+                    onChange={(e) => setFocusedToneGroup(e.target.value)}
+                    className="rounded border border-[#d7c7ee] bg-white px-2 py-0.5 text-[11px] text-[#5f5276]"
+                  >
+                    <option value="none">All</option>
+                    <option value="light">Flower Light</option>
+                    <option value="mid">Flower Mid</option>
+                    <option value="dark">Flower Dark</option>
+                    <option value="foliageLight">Foliage Light</option>
+                    <option value="foliageDark">Foliage Dark</option>
+                    <option value="foliage">Foliage All</option>
+                  </select>
+                </label>
               ) : null}
               {stencilLayers.length > 0 ? (
                 <div className="inline-flex rounded-md border border-[#d7c7ee] bg-[#f4eefc] p-1">
@@ -5149,7 +5160,19 @@ function StencilStudioPanel({
               {focusedLayer
                 ? `Focused on ${focusedLayer.name || `Layer ${focusedLayer.index + 1}`} in vector preview.`
                 : focusedToneGroup !== 'none'
-                ? `${focusedToneGroup === 'foliage' ? 'Foliage' : focusedToneGroup === 'light' ? 'Light' : focusedToneGroup === 'mid' ? 'Mid' : 'Dark'} tone focus preview.`
+                ? `${
+                    focusedToneGroup === 'foliage'
+                      ? 'Foliage'
+                      : focusedToneGroup === 'foliageLight'
+                      ? 'Foliage Light'
+                      : focusedToneGroup === 'foliageDark'
+                      ? 'Foliage Dark'
+                      : focusedToneGroup === 'light'
+                      ? 'Flower Light'
+                      : focusedToneGroup === 'mid'
+                      ? 'Flower Mid'
+                      : 'Flower Dark'
+                  } focus preview.`
                 : normalizedGenerator === 'auto'
                 ? `${stencilLayers.length} auto-separated layers generated.`
                 : normalizedGenerator === 'trace'
@@ -5252,7 +5275,7 @@ function StencilStudioPanel({
                   disabled={stencilLayers.length < 3}
                   className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Auto Group To Tone + Foliage Plates
+                  Auto Group To Flower + Foliage Tone Plates
                 </button>
                 <button
                   type="button"
@@ -6457,10 +6480,11 @@ function App() {
       }
       const buckets = splitLayersIntoToneBuckets(eligible)
       const entries = [
-        { key: 'foliage', label: 'Foliage Plate', layers: buckets.foliage || [] },
-        { key: 'light', label: 'Light Tone Plate', layers: buckets.light },
-        { key: 'mid', label: 'Mid Tone Plate', layers: buckets.mid },
-        { key: 'dark', label: 'Dark Tone Plate', layers: buckets.dark },
+        { key: 'foliageLight', label: 'Foliage Light Plate', layers: buckets.foliageLight || [] },
+        { key: 'foliageDark', label: 'Foliage Dark Plate', layers: buckets.foliageDark || [] },
+        { key: 'light', label: 'Flower Light Plate', layers: buckets.light },
+        { key: 'mid', label: 'Flower Mid Plate', layers: buckets.mid },
+        { key: 'dark', label: 'Flower Dark Plate', layers: buckets.dark },
       ]
       const grouped = entries
         .map((entry, index) => {
