@@ -2671,98 +2671,56 @@ function buildPlatePath({ minX = 0, minY = 0, width, height, shape = 'rectangle'
   return `M ${x} ${y} H ${x + w} V ${y + h} H ${x} Z`
 }
 
-function buildPlateBinaryImageData(layerSvg, { shape = 'rectangle', margin = 0.08 } = {}) {
-  const parser = new DOMParser()
-  const parsed = parser.parseFromString(layerSvg, 'image/svg+xml')
-  const sourceSvg = parsed.querySelector('svg')
-  if (!sourceSvg) return null
-  const { minX, minY, width, height } = getSvgViewBox(sourceSvg)
-  const cutPaths = [...sourceSvg.querySelectorAll('path')]
-    .map((path) => String(path.getAttribute('d') || '').trim())
-    .filter(Boolean)
-  if (!cutPaths.length) return null
-
-  const rasterWidth = Math.max(64, Math.round(width))
-  const rasterHeight = Math.max(64, Math.round(height))
-  const canvas = document.createElement('canvas')
-  canvas.width = rasterWidth
-  canvas.height = rasterHeight
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })
-  if (!ctx) return null
-
-  const scaleX = rasterWidth / Math.max(1, width)
-  const scaleY = rasterHeight / Math.max(1, height)
-  const platePath = buildPlatePath({ minX, minY, width, height, shape, margin })
-
-  ctx.fillStyle = '#ffffff'
-  ctx.fillRect(0, 0, rasterWidth, rasterHeight)
-  ctx.save()
-  ctx.scale(scaleX, scaleY)
-  ctx.translate(-minX, -minY)
-  ctx.fillStyle = '#000000'
-  ctx.fill(new Path2D(platePath))
-  ctx.globalCompositeOperation = 'destination-out'
-  cutPaths.forEach((pathValue) => {
-    ctx.fill(new Path2D(pathValue))
-  })
-  ctx.restore()
-
-  const imageData = ctx.getImageData(0, 0, rasterWidth, rasterHeight)
-  const data = imageData.data
-  for (let i = 0; i < data.length; i += 4) {
-    const alpha = data[i + 3]
-    if (alpha < 200) {
-      data[i] = 255
-      data[i + 1] = 255
-      data[i + 2] = 255
-      data[i + 3] = 255
-      continue
-    }
-    const luminance = data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722
-    const isCut = luminance > 160
-    const fill = isCut ? 255 : 0
-    data[i] = fill
-    data[i + 1] = fill
-    data[i + 2] = fill
-    data[i + 3] = 255
-  }
-  return imageData
-}
-
 function buildPlateCutSvg(
   layerSvg,
-  { shape = 'rectangle', margin = 0.08, fillColor = '#111111', detail = 6, noiseFilter = 6 } = {},
+  { shape = 'rectangle', margin = 0.08, fillColor = '#111111' } = {},
 ) {
-  const plateImageData = buildPlateBinaryImageData(layerSvg, { shape, margin })
-  if (plateImageData) {
-    const rawSvg = buildStencilSvg(plateImageData, {
-      detail: Math.max(2, Number(detail) || 6),
-      noiseFilter: Math.max(0, Number(noiseFilter) || 6),
-      bridgeWidth: 0,
-    })
-    return tintStencilSvg(rawSvg, normalizeHex(fillColor) || '#111111')
-  }
-
   const parser = new DOMParser()
   const parsed = parser.parseFromString(layerSvg, 'image/svg+xml')
   const sourceSvg = parsed.querySelector('svg')
   if (!sourceSvg) return layerSvg
   const { minX, minY, width, height } = getSvgViewBox(sourceSvg)
-  const cutPaths = [...sourceSvg.querySelectorAll('path')]
-    .map((path) => String(path.getAttribute('d') || '').trim())
-    .filter(Boolean)
-  if (!cutPaths.length) return layerSvg
+  const sourceGeometry = [...sourceSvg.children].filter((node) => {
+    const tag = String(node?.tagName || '').toLowerCase()
+    return tag !== 'defs'
+  })
+  if (!sourceGeometry.length) return layerSvg
   const outputDoc = document.implementation.createDocument('http://www.w3.org/2000/svg', 'svg', null)
   const outputSvg = outputDoc.documentElement
   outputSvg.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
   outputSvg.setAttribute('viewBox', `${minX} ${minY} ${width} ${height}`)
+  outputSvg.setAttribute('preserveAspectRatio', sourceSvg.getAttribute('preserveAspectRatio') || 'xMidYMid meet')
+  const sourceWidth = sourceSvg.getAttribute('width')
+  const sourceHeight = sourceSvg.getAttribute('height')
+  if (sourceWidth) outputSvg.setAttribute('width', sourceWidth)
+  if (sourceHeight) outputSvg.setAttribute('height', sourceHeight)
+
   const platePath = buildPlatePath({ minX, minY, width, height, shape, margin })
-  const plate = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'path')
-  plate.setAttribute('d', `${platePath} ${cutPaths.join(' ')}`.trim())
-  plate.setAttribute('fill', normalizeHex(fillColor) || '#111111')
-  plate.setAttribute('fill-rule', 'evenodd')
-  plate.setAttribute('clip-rule', 'evenodd')
-  outputSvg.appendChild(plate)
+  const defs = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'defs')
+  const clip = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'clipPath')
+  clip.setAttribute('id', 'plate-clip')
+  const clipPathNode = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'path')
+  clipPathNode.setAttribute('d', platePath)
+  clip.appendChild(clipPathNode)
+  defs.appendChild(clip)
+  outputSvg.appendChild(defs)
+
+  const basePlate = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'path')
+  basePlate.setAttribute('d', platePath)
+  basePlate.setAttribute('fill', normalizeHex(fillColor) || '#111111')
+  outputSvg.appendChild(basePlate)
+
+  const cutLayerGroup = outputDoc.createElementNS('http://www.w3.org/2000/svg', 'g')
+  cutLayerGroup.setAttribute('clip-path', 'url(#plate-clip)')
+  sourceGeometry.forEach((node) => {
+    cutLayerGroup.appendChild(outputDoc.importNode(node, true))
+  })
+  cutLayerGroup.querySelectorAll('path, rect, circle, ellipse, polygon, polyline').forEach((node) => {
+    node.setAttribute('fill', '#ffffff')
+    node.removeAttribute('stroke')
+  })
+  outputSvg.appendChild(cutLayerGroup)
+
   return new XMLSerializer().serializeToString(outputSvg)
 }
 
@@ -5386,8 +5344,6 @@ function StencilStudioPanel({
                                   shape: stencilSettings.plateShape || 'rectangle',
                                   margin: stencilSettings.plateMargin ?? 0.08,
                                   fillColor: layer.colorHex || '#111111',
-                                  detail: stencilSettings.detail ?? 6,
-                                  noiseFilter: Math.max(0, Number(stencilSettings.noiseFilter ?? 0)),
                                 }),
                               )
                             : fitSvgForDisplay(tintStencilSvg(layer.svg, layer.colorHex || '#7E86C2')),
@@ -6501,8 +6457,6 @@ function App() {
           shape: stencilSettings.plateShape || 'rectangle',
           margin: stencilSettings.plateMargin ?? 0.08,
           fillColor: layer.colorHex || '#111111',
-          detail: stencilSettings.detail ?? 6,
-          noiseFilter: Math.max(0, Number(stencilSettings.noiseFilter ?? 0)),
         }),
         fileName: `${safeBaseName} - Plate.svg`,
       })
