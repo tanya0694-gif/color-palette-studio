@@ -746,8 +746,8 @@ function createPosterizedStencilLayers(
           }
         : null
     const isLikelyBackgroundPixel = (r, g, b, a, pixelIndex = -1) => {
-      if (backgroundMask && pixelIndex >= 0 && backgroundMask[pixelIndex]) return true
       if (a < 24) return true
+      if (backgroundMask) return pixelIndex >= 0 ? Boolean(backgroundMask[pixelIndex]) : false
       const { s, l } = rgbToHslTuple(r, g, b)
       if (bgColor) {
         const distance = rgbTripletDistance(r, g, b, bgColor.r, bgColor.g, bgColor.b)
@@ -1241,8 +1241,9 @@ function detectTraceColorPalette(img, { maxColors = 15, removeBackground = true,
     edgeStats.count > 0
       ? { r: edgeStats.r / edgeStats.count, g: edgeStats.g / edgeStats.count, b: edgeStats.b / edgeStats.count }
       : null
-  const isBackgroundPixel = (r, g, b, a) => {
+  const isBackgroundPixel = (r, g, b, a, pixelIndex = -1) => {
     if (a < 18) return true
+    if (backgroundMask) return pixelIndex >= 0 ? Boolean(backgroundMask[pixelIndex]) : false
     const { s, l } = toHsl(r, g, b)
     if (bgColor) {
       const d = rgbTripletDistance(r, g, b, bgColor.r, bgColor.g, bgColor.b)
@@ -1264,7 +1265,7 @@ function detectTraceColorPalette(img, { maxColors = 15, removeBackground = true,
       const a = source.data[idx + 3]
       const pixelIndex = idx / 4
       if (backgroundMask && backgroundMask[pixelIndex]) continue
-      if (isBackgroundPixel(r, g, b, a)) continue
+      if (isBackgroundPixel(r, g, b, a, pixelIndex)) continue
       const rq = Math.round(r / quant) * quant
       const gq = Math.round(g / quant) * quant
       const bq = Math.round(b / quant) * quant
@@ -1415,8 +1416,8 @@ function createTraceStyleStencilLayers(
       ? { r: edgeStats.r / edgeStats.count, g: edgeStats.g / edgeStats.count, b: edgeStats.b / edgeStats.count }
       : null
   const isBackgroundPixel = (r, g, b, a, pixelIndex = -1) => {
-    if (backgroundMask && pixelIndex >= 0 && backgroundMask[pixelIndex]) return true
     if (a < 18) return true
+    if (backgroundMask) return pixelIndex >= 0 ? Boolean(backgroundMask[pixelIndex]) : false
     const { s, l } = rgbToHslTuple(r, g, b)
     if (bgColor) {
       const d = rgbTripletDistance(r, g, b, bgColor.r, bgColor.g, bgColor.b)
