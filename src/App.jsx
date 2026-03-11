@@ -3811,8 +3811,6 @@ function StencilStudioPanel({
   const [selectedLayerKeys, setSelectedLayerKeys] = useState([])
   const [focusedLayerKey, setFocusedLayerKey] = useState(null)
   const [layerPreviewMode, setLayerPreviewMode] = useState('elements')
-  const [showSourceOverlay, setShowSourceOverlay] = useState(true)
-  const [sourceOverlayOpacity, setSourceOverlayOpacity] = useState(35)
   const vectorPanStateRef = useRef(null)
   const previewImageRef = useRef(null)
   const splitSamplerCanvasRef = useRef(null)
@@ -5079,31 +5077,6 @@ function StencilStudioPanel({
                   </button>
                 </div>
               ) : null}
-              {stencilImagePreviewUrl ? (
-                <div className="ml-1 inline-flex items-center gap-1 rounded-md border border-[#d7c7ee] bg-white p-1">
-                  <button
-                    type="button"
-                    onClick={() => setShowSourceOverlay((value) => !value)}
-                    className={`rounded px-2 py-1 text-[10px] font-semibold ${
-                      showSourceOverlay ? 'bg-[#a58bc4] text-[#3f3254]' : 'text-[#5f5276] hover:bg-[#f5effd]'
-                    }`}
-                    title="Overlay source image under vectors"
-                  >
-                    {showSourceOverlay ? 'Overlay On' : 'Overlay Off'}
-                  </button>
-                  {showSourceOverlay ? (
-                    <input
-                      type="range"
-                      min={10}
-                      max={80}
-                      value={sourceOverlayOpacity}
-                      onChange={(e) => setSourceOverlayOpacity(Number(e.target.value))}
-                      className="w-20 accent-[#9678b8]"
-                      title="Overlay opacity"
-                    />
-                  ) : null}
-                </div>
-              ) : null}
             </div>
             <p className="text-xs text-[#9a8d80]">
               {focusedLayer
@@ -5149,14 +5122,6 @@ function StencilStudioPanel({
                     willChange: 'transform',
                   }}
                 >
-                  {showSourceOverlay && stencilImagePreviewUrl ? (
-                    <img
-                      src={stencilImagePreviewUrl}
-                      alt="Source overlay"
-                      className="absolute inset-0 h-full w-full object-contain"
-                      style={{ opacity: sourceOverlayOpacity / 100, pointerEvents: 'none' }}
-                    />
-                  ) : null}
                   <div className="relative z-10 h-full w-full" dangerouslySetInnerHTML={{ __html: displayVectorSvg }} />
                 </div>
               </div>
