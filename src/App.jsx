@@ -2425,6 +2425,26 @@ function averageColorFromLayers(layers = []) {
   return safeAverageColor(stats, '#7E86C2')
 }
 
+function splitLayersIntoToneBuckets(layers = []) {
+  const withLightness = (Array.isArray(layers) ? layers : [])
+    .filter((layer) => layer && layer.colorHex)
+    .map((layer) => ({
+      layer,
+      lightness: hexToHsl(layer.colorHex)?.l ?? 50,
+    }))
+    .sort((a, b) => b.lightness - a.lightness)
+  if (!withLightness.length) return { light: [], mid: [], dark: [] }
+
+  const total = withLightness.length
+  const lightEnd = Math.max(1, Math.round(total / 3))
+  const midEnd = Math.max(lightEnd + 1, Math.round((total * 2) / 3))
+  return {
+    light: withLightness.slice(0, lightEnd).map((entry) => entry.layer),
+    mid: withLightness.slice(lightEnd, midEnd).map((entry) => entry.layer),
+    dark: withLightness.slice(midEnd).map((entry) => entry.layer),
+  }
+}
+
 function mergeTraceLayersToTargetCount(layers = [], targetCount = 1) {
   const desired = Math.max(1, Math.min(15, Math.round(targetCount || 1)))
   let working = (Array.isArray(layers) ? layers : [])
@@ -3793,6 +3813,7 @@ function StencilStudioPanel({
   onDownloadLayerSvg,
   onMergeLayers,
   onRemoveLayerAndFill,
+  onAutoGroupByTone,
   onSaveToLibrary,
   onLoadFromLibrary,
   onDeleteFromLibrary,
@@ -3810,6 +3831,7 @@ function StencilStudioPanel({
   const [pendingSplitColorField, setPendingSplitColorField] = useState(null)
   const [selectedLayerKeys, setSelectedLayerKeys] = useState([])
   const [focusedLayerKey, setFocusedLayerKey] = useState(null)
+  const [focusedToneGroup, setFocusedToneGroup] = useState('none')
   const [layerPreviewMode, setLayerPreviewMode] = useState('elements')
   const vectorPanStateRef = useRef(null)
   const previewImageRef = useRef(null)
@@ -3827,8 +3849,17 @@ function StencilStudioPanel({
     () => stencilLayers.find((layer) => String(layer?.index) === String(focusedLayerKey)) || null,
     [stencilLayers, focusedLayerKey],
   )
+  const toneBuckets = useMemo(() => splitLayersIntoToneBuckets(stencilLayers), [stencilLayers])
+  const focusedToneSvg = useMemo(() => {
+    if (focusedToneGroup === 'light') return buildCompositeLayerPreview(toneBuckets.light, { useLayerColor: true })
+    if (focusedToneGroup === 'mid') return buildCompositeLayerPreview(toneBuckets.mid, { useLayerColor: true })
+    if (focusedToneGroup === 'dark') return buildCompositeLayerPreview(toneBuckets.dark, { useLayerColor: true })
+    return ''
+  }, [focusedToneGroup, toneBuckets])
   const activeVectorSvg =
-    focusedLayer?.svg
+    focusedToneSvg
+      ? focusedToneSvg
+      : focusedLayer?.svg
       ? tintStencilSvg(focusedLayer.svg, focusedLayer.colorHex || '#111111')
       : vectorPreviewMode === 'stacked'
       ? compositePreviewSvg || stencilSvg
@@ -3868,6 +3899,9 @@ function StencilStudioPanel({
     const exists = stencilLayers.some((layer) => String(layer?.index) === String(focusedLayerKey))
     if (!exists) setFocusedLayerKey(null)
   }, [stencilLayers, focusedLayerKey])
+  useEffect(() => {
+    setFocusedToneGroup('none')
+  }, [stencilLayers])
 
   function layerKey(layer) {
     return String(layer?.index)
@@ -5017,6 +5051,27 @@ function StencilStudioPanel({
                   Clear Focus ({focusedLayer.name || `Layer ${focusedLayer.index + 1}`})
                 </button>
               ) : null}
+              {stencilLayers.length >= 3 ? (
+                <div className="inline-flex rounded-md border border-[#d7c7ee] bg-[#f4eefc] p-1">
+                  {[
+                    { key: 'none', label: 'All' },
+                    { key: 'light', label: 'Light' },
+                    { key: 'mid', label: 'Mid' },
+                    { key: 'dark', label: 'Dark' },
+                  ].map((entry) => (
+                    <button
+                      key={`tone-focus-${entry.key}`}
+                      type="button"
+                      onClick={() => setFocusedToneGroup(entry.key)}
+                      className={`rounded px-2 py-1 text-[10px] font-semibold ${
+                        focusedToneGroup === entry.key ? 'bg-[#a58bc4] text-[#3f3254]' : 'text-[#5f5276] hover:bg-white'
+                      }`}
+                    >
+                      {entry.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               {stencilLayers.length > 0 ? (
                 <div className="inline-flex rounded-md border border-[#d7c7ee] bg-[#f4eefc] p-1">
                   <button
@@ -5081,6 +5136,8 @@ function StencilStudioPanel({
             <p className="text-xs text-[#9a8d80]">
               {focusedLayer
                 ? `Focused on ${focusedLayer.name || `Layer ${focusedLayer.index + 1}`} in vector preview.`
+                : focusedToneGroup !== 'none'
+                ? `${focusedToneGroup === 'light' ? 'Light' : focusedToneGroup === 'mid' ? 'Mid' : 'Dark'} tone focus preview.`
                 : normalizedGenerator === 'auto'
                 ? `${stencilLayers.length} auto-separated layers generated.`
                 : normalizedGenerator === 'trace'
@@ -5176,6 +5233,14 @@ function StencilStudioPanel({
                   className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Combine Selected Layers ({selectedLayerKeys.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onAutoGroupByTone?.()}
+                  disabled={stencilLayers.length < 3}
+                  className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Auto Group To 3 Tone Plates
                 </button>
                 <button
                   type="button"
@@ -6371,6 +6436,52 @@ function App() {
     setStencilLayers((prev) => [...prev, mergedLayer])
   }
 
+  function autoGroupStencilLayersByTone() {
+    setStencilLayers((prev) => {
+      const eligible = prev.filter((layer) => layer?.imageData && layer?.svg)
+      if (eligible.length < 3) {
+        alert('Need at least 3 generated layers to auto-group by tone.')
+        return prev
+      }
+      const buckets = splitLayersIntoToneBuckets(eligible)
+      const entries = [
+        { key: 'light', label: 'Light Tone Plate', layers: buckets.light },
+        { key: 'mid', label: 'Mid Tone Plate', layers: buckets.mid },
+        { key: 'dark', label: 'Dark Tone Plate', layers: buckets.dark },
+      ]
+      const grouped = entries
+        .map((entry, index) => {
+          if (!entry.layers.length) return null
+          const mergedImageData = combineBinaryLayerImageData(entry.layers)
+          if (!mergedImageData) return null
+          const rawSvg = buildStencilSvg(mergedImageData, {
+            ...stencilSettings,
+            noiseFilter: Math.max(10, Number(stencilSettings.noiseFilter || 0)),
+          })
+          const svg = wrapSvgForStencilCanvas(rawSvg, {
+            paperSize: stencilSettings.paperSize,
+            orientation: stencilSettings.orientation,
+            mode: 'multi',
+          })
+          return {
+            index,
+            name: entry.label,
+            hint: `Auto-grouped from ${entry.layers.length} layers`,
+            previewUrl: imageDataToDataUrl(mergedImageData),
+            colorHex: averageColorFromLayers(entry.layers),
+            imageData: mergedImageData,
+            svg,
+          }
+        })
+        .filter(Boolean)
+
+      if (!grouped.length) return prev
+      setStencilSvg(grouped[0]?.svg || '')
+      setStencilProcessedPreviewUrl(grouped[0]?.previewUrl || '')
+      return grouped
+    })
+  }
+
   function removeStencilLayerAndFill(layerInput) {
     const layerKey = String(layerInput?.index ?? '')
     if (!layerKey) return
@@ -7548,6 +7659,7 @@ function App() {
           onDownloadLayerSvg={downloadStencilLayerSvg}
           onMergeLayers={combineStencilLayers}
           onRemoveLayerAndFill={removeStencilLayerAndFill}
+          onAutoGroupByTone={autoGroupStencilLayersByTone}
           onSaveToLibrary={saveStencilToLibrary}
           onLoadFromLibrary={loadStencilFromLibrary}
           onDeleteFromLibrary={deleteStencilFromLibrary}
