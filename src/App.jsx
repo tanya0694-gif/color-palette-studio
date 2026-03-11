@@ -2436,6 +2436,10 @@ function mergeTraceLayersToTargetCount(layers = [], targetCount = 1) {
     }))
 
   if (working.length <= desired) return working.map((layer, index) => ({ ...layer, index }))
+  const totalPixels = Math.max(
+    1,
+    working.reduce((sum, layer) => sum + Math.max(0, Number(layer.pixelCount) || 0), 0),
+  )
 
   const layerMergeScore = (a, b) => {
     const base = colorDistance(a.colorHex || '#7E86C2', b.colorHex || '#7E86C2')
@@ -2451,6 +2455,13 @@ function mergeTraceLayersToTargetCount(layers = [], targetCount = 1) {
     if (lightDelta > 16) penalty += 70
     if (hueDelta > 20) penalty += 90
     if (satDelta > 28) penalty += 40
+
+    const ratioA = (Number(a.pixelCount) || 0) / totalPixels
+    const ratioB = (Number(b.pixelCount) || 0) / totalPixels
+    const isDetailA = ratioA > 0 && ratioA < 0.06
+    const isDetailB = ratioB > 0 && ratioB < 0.06
+    if (isDetailA || isDetailB) penalty += 220
+    if (isDetailA && isDetailB) penalty += 140
 
     return base + penalty
   }
@@ -2473,16 +2484,9 @@ function mergeTraceLayersToTargetCount(layers = [], targetCount = 1) {
     const a = working[pairA]
     const b = working[pairB]
     const mergedImageData = combineBinaryLayerImageData([a, b]) || a.imageData
-    const aRgb = hexToRgb(a.colorHex || '#7E86C2') || { r: 126, g: 134, b: 194 }
-    const bRgb = hexToRgb(b.colorHex || '#7E86C2') || { r: 126, g: 134, b: 194 }
     const aWeight = Math.max(1, Number(a.pixelCount) || 1)
     const bWeight = Math.max(1, Number(b.pixelCount) || 1)
-    const total = aWeight + bWeight
-    const mergedColor = rgbToHex(
-      (aRgb.r * aWeight + bRgb.r * bWeight) / total,
-      (aRgb.g * aWeight + bRgb.g * bWeight) / total,
-      (aRgb.b * aWeight + bRgb.b * bWeight) / total,
-    )
+    const mergedColor = aWeight >= bWeight ? a.colorHex || '#7E86C2' : b.colorHex || '#7E86C2'
 
     const mergedLayer = {
       ...a,
