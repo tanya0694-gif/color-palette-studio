@@ -1230,7 +1230,7 @@ function createTraceStyleStencilLayers(
     const familyMismatch =
       (isPinkFamily(sampleHsl.h) && isPurpleFamily(centroidHsl.h)) ||
       (isPurpleFamily(sampleHsl.h) && isPinkFamily(centroidHsl.h))
-    const familyPenalty = familyMismatch ? 120 * (sharedSaturation / 100) : 0
+    const familyPenalty = familyMismatch ? 55 * (sharedSaturation / 100) : 0
 
     return base + huePenalty + familyPenalty
   }
@@ -2458,6 +2458,7 @@ function mergeTraceLayersToTargetCount(layers = [], targetCount = 1) {
   const protectedFamilyMinimums = {
     yellow: initialFamilyCounts.yellow >= 3 && desired >= 8 ? 3 : 0,
     pink: initialFamilyCounts.pink >= 3 && desired >= 8 ? 2 : 0,
+    purple: initialFamilyCounts.purple >= 4 && desired >= 8 ? 3 : initialFamilyCounts.purple >= 3 && desired >= 7 ? 2 : 0,
   }
 
   const layerMergeScore = (a, b, familyCounts) => {
@@ -2486,7 +2487,7 @@ function mergeTraceLayersToTargetCount(layers = [], targetCount = 1) {
     const familyB = getFamily(b)
     const pinkPurpleMismatch =
       (familyA === 'pink' && familyB === 'purple') || (familyA === 'purple' && familyB === 'pink')
-    if (pinkPurpleMismatch) penalty += 2200
+    if (pinkPurpleMismatch) penalty += 700
     const minA = protectedFamilyMinimums[familyA] || 0
     const minB = protectedFamilyMinimums[familyB] || 0
     const countA = familyCounts[familyA] || 0
@@ -2523,7 +2524,14 @@ function mergeTraceLayersToTargetCount(layers = [], targetCount = 1) {
     const mergedImageData = combineBinaryLayerImageData([a, b]) || a.imageData
     const aWeight = Math.max(1, Number(a.pixelCount) || 1)
     const bWeight = Math.max(1, Number(b.pixelCount) || 1)
-    const mergedColor = aWeight >= bWeight ? a.colorHex || '#7E86C2' : b.colorHex || '#7E86C2'
+    const aRgb = hexToRgb(a.colorHex || '#7E86C2') || { r: 126, g: 134, b: 194 }
+    const bRgb = hexToRgb(b.colorHex || '#7E86C2') || { r: 126, g: 134, b: 194 }
+    const total = aWeight + bWeight
+    const mergedColor = rgbToHex(
+      (aRgb.r * aWeight + bRgb.r * bWeight) / total,
+      (aRgb.g * aWeight + bRgb.g * bWeight) / total,
+      (aRgb.b * aWeight + bRgb.b * bWeight) / total,
+    )
 
     const mergedLayer = {
       ...a,
