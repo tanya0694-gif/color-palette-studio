@@ -2426,14 +2426,23 @@ function averageColorFromLayers(layers = []) {
 }
 
 function splitLayersIntoToneBuckets(layers = []) {
-  const withLightness = (Array.isArray(layers) ? layers : [])
+  const isGreenFamily = (hex) => {
+    const hsl = hexToHsl(hex || '#7E86C2') || { h: 0, s: 0, l: 50 }
+    return hsl.s >= 14 && hsl.h >= 75 && hsl.h <= 170
+  }
+
+  const normalized = (Array.isArray(layers) ? layers : []).filter((layer) => layer && layer.colorHex)
+  const foliage = normalized.filter((layer) => isGreenFamily(layer.colorHex))
+  const nonFoliage = normalized.filter((layer) => !isGreenFamily(layer.colorHex))
+
+  const withLightness = nonFoliage
     .filter((layer) => layer && layer.colorHex)
     .map((layer) => ({
       layer,
       lightness: hexToHsl(layer.colorHex)?.l ?? 50,
     }))
     .sort((a, b) => b.lightness - a.lightness)
-  if (!withLightness.length) return { light: [], mid: [], dark: [] }
+  if (!withLightness.length) return { light: [], mid: [], dark: [], foliage }
 
   const total = withLightness.length
   const lightEnd = Math.max(1, Math.round(total / 3))
@@ -2442,6 +2451,7 @@ function splitLayersIntoToneBuckets(layers = []) {
     light: withLightness.slice(0, lightEnd).map((entry) => entry.layer),
     mid: withLightness.slice(lightEnd, midEnd).map((entry) => entry.layer),
     dark: withLightness.slice(midEnd).map((entry) => entry.layer),
+    foliage,
   }
 }
 
@@ -3851,6 +3861,7 @@ function StencilStudioPanel({
   )
   const toneBuckets = useMemo(() => splitLayersIntoToneBuckets(stencilLayers), [stencilLayers])
   const focusedToneSvg = useMemo(() => {
+    if (focusedToneGroup === 'foliage') return buildCompositeLayerPreview(toneBuckets.foliage, { useLayerColor: true })
     if (focusedToneGroup === 'light') return buildCompositeLayerPreview(toneBuckets.light, { useLayerColor: true })
     if (focusedToneGroup === 'mid') return buildCompositeLayerPreview(toneBuckets.mid, { useLayerColor: true })
     if (focusedToneGroup === 'dark') return buildCompositeLayerPreview(toneBuckets.dark, { useLayerColor: true })
@@ -5055,6 +5066,7 @@ function StencilStudioPanel({
                 <div className="inline-flex rounded-md border border-[#d7c7ee] bg-[#f4eefc] p-1">
                   {[
                     { key: 'none', label: 'All' },
+                    { key: 'foliage', label: 'Foliage' },
                     { key: 'light', label: 'Light' },
                     { key: 'mid', label: 'Mid' },
                     { key: 'dark', label: 'Dark' },
@@ -5137,7 +5149,7 @@ function StencilStudioPanel({
               {focusedLayer
                 ? `Focused on ${focusedLayer.name || `Layer ${focusedLayer.index + 1}`} in vector preview.`
                 : focusedToneGroup !== 'none'
-                ? `${focusedToneGroup === 'light' ? 'Light' : focusedToneGroup === 'mid' ? 'Mid' : 'Dark'} tone focus preview.`
+                ? `${focusedToneGroup === 'foliage' ? 'Foliage' : focusedToneGroup === 'light' ? 'Light' : focusedToneGroup === 'mid' ? 'Mid' : 'Dark'} tone focus preview.`
                 : normalizedGenerator === 'auto'
                 ? `${stencilLayers.length} auto-separated layers generated.`
                 : normalizedGenerator === 'trace'
@@ -5240,7 +5252,7 @@ function StencilStudioPanel({
                   disabled={stencilLayers.length < 3}
                   className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Auto Group To 3 Tone Plates
+                  Auto Group To Tone + Foliage Plates
                 </button>
                 <button
                   type="button"
@@ -6445,6 +6457,7 @@ function App() {
       }
       const buckets = splitLayersIntoToneBuckets(eligible)
       const entries = [
+        { key: 'foliage', label: 'Foliage Plate', layers: buckets.foliage || [] },
         { key: 'light', label: 'Light Tone Plate', layers: buckets.light },
         { key: 'mid', label: 'Mid Tone Plate', layers: buckets.mid },
         { key: 'dark', label: 'Dark Tone Plate', layers: buckets.dark },
