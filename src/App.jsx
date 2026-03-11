@@ -202,6 +202,87 @@ function rgbTripletDistance(r1, g1, b1, r2, g2, b2) {
   return Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2)
 }
 
+function cloneImageData(imageData) {
+  return new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height)
+}
+
+function boxBlurImageData(imageData, radius = 1) {
+  if (!imageData?.data || radius <= 0) return imageData
+  const width = imageData.width
+  const height = imageData.height
+  const src = imageData.data
+  const dst = new Uint8ClampedArray(src.length)
+  const r = Math.max(1, Math.min(4, Math.round(radius)))
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let rs = 0
+      let gs = 0
+      let bs = 0
+      let as = 0
+      let count = 0
+      for (let oy = -r; oy <= r; oy += 1) {
+        const yy = Math.max(0, Math.min(height - 1, y + oy))
+        for (let ox = -r; ox <= r; ox += 1) {
+          const xx = Math.max(0, Math.min(width - 1, x + ox))
+          const idx = (yy * width + xx) * 4
+          rs += src[idx]
+          gs += src[idx + 1]
+          bs += src[idx + 2]
+          as += src[idx + 3]
+          count += 1
+        }
+      }
+      const outIdx = (y * width + x) * 4
+      dst[outIdx] = Math.round(rs / count)
+      dst[outIdx + 1] = Math.round(gs / count)
+      dst[outIdx + 2] = Math.round(bs / count)
+      dst[outIdx + 3] = Math.round(as / count)
+    }
+  }
+  imageData.data.set(dst)
+  return imageData
+}
+
+function smoothLabelMap(labels, width, height, { passes = 1, lockedMask = null } = {}) {
+  if (!labels || !labels.length || width <= 0 || height <= 0) return labels
+  const total = width * height
+  for (let pass = 0; pass < Math.max(1, passes); pass += 1) {
+    const src = new Int16Array(labels)
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const idx = y * width + x
+        if (lockedMask && lockedMask[idx]) continue
+        const tally = new Map()
+        for (let oy = -1; oy <= 1; oy += 1) {
+          const yy = y + oy
+          if (yy < 0 || yy >= height) continue
+          for (let ox = -1; ox <= 1; ox += 1) {
+            const xx = x + ox
+            if (xx < 0 || xx >= width) continue
+            const nIdx = yy * width + xx
+            const value = src[nIdx]
+            if (value < 0) continue
+            tally.set(value, (tally.get(value) || 0) + 1)
+          }
+        }
+        let winner = src[idx]
+        let winnerCount = -1
+        tally.forEach((count, label) => {
+          if (count > winnerCount) {
+            winner = label
+            winnerCount = count
+          }
+        })
+        labels[idx] = winner
+      }
+    }
+  }
+  for (let i = 0; i < total; i += 1) {
+    if (labels[i] < -1) labels[i] = -1
+  }
+  return labels
+}
+
 function buildConnectedEdgeBackgroundMask(
   imageData,
   { tolerance = 26, alphaThreshold = 20, minCoverage = 0.04, maxCoverage = 0.97 } = {},
@@ -1178,6 +1259,8 @@ function detectTraceColorPalette(img, { maxColors = 15, removeBackground = true,
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) return []
   const source = ctx.getImageData(0, 0, width, height)
+  const working = cloneImageData(source)
+  boxBlurImageData(working, 1)
   const backgroundMask = removeBackground
     ? buildConnectedEdgeBackgroundMask(source, { tolerance: backgroundTolerance })
     : null
@@ -1258,9 +1341,9 @@ function detectTraceColorPalette(img, { maxColors = 15, removeBackground = true,
   for (let y = 0; y < height; y += stride) {
     for (let x = 0; x < width; x += stride) {
       const idx = (y * width + x) * 4
-      const r = source.data[idx]
-      const g = source.data[idx + 1]
-      const b = source.data[idx + 2]
+      const r = working.data[idx]
+      const g = working.data[idx + 1]
+      const b = working.data[idx + 2]
       const a = source.data[idx + 3]
       const pixelIndex = idx / 4
       if (backgroundMask && backgroundMask[pixelIndex]) continue
@@ -1329,6 +1412,8 @@ function createTraceStyleStencilLayers(
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) throw new Error('Could not create canvas context.')
   const source = ctx.getImageData(0, 0, width, height)
+  const working = cloneImageData(source)
+  boxBlurImageData(working, detail >= 7 ? 1 : 2)
   const backgroundMask = removeBackground
     ? buildConnectedEdgeBackgroundMask(source, { tolerance: backgroundTolerance })
     : null
@@ -1431,9 +1516,9 @@ function createTraceStyleStencilLayers(
   for (let y = 0; y < height; y += sampleStride) {
     for (let x = 0; x < width; x += sampleStride) {
       const idx = (y * width + x) * 4
-      const r = source.data[idx]
-      const g = source.data[idx + 1]
-      const b = source.data[idx + 2]
+      const r = working.data[idx]
+      const g = working.data[idx + 1]
+      const b = working.data[idx + 2]
       const a = source.data[idx + 3]
       const pixelIndex = idx / 4
       if (isBackgroundPixel(r, g, b, a, pixelIndex)) continue
@@ -1498,17 +1583,12 @@ function createTraceStyleStencilLayers(
     }
   }
 
-  const layers = Array.from({ length: clusterCount }, (_, index) => ({
-    index,
-    imageData: createBlankMask(width, height),
-    previewUrl: '',
-    colorStats: { r: 0, g: 0, b: 0, count: 0 },
-  }))
-
+  const labels = new Int16Array(width * height)
+  labels.fill(-1)
   for (let i = 0; i < source.data.length; i += 4) {
-    const r = source.data[i]
-    const g = source.data[i + 1]
-    const b = source.data[i + 2]
+    const r = working.data[i]
+    const g = working.data[i + 1]
+    const b = working.data[i + 2]
     const a = source.data[i + 3]
     const pixelIndex = i / 4
     if (isBackgroundPixel(r, g, b, a, pixelIndex)) continue
@@ -1522,14 +1602,31 @@ function createTraceStyleStencilLayers(
         winner = c
       }
     }
-    const layer = layers[winner]
-    layer.imageData.data[i] = 0
-    layer.imageData.data[i + 1] = 0
-    layer.imageData.data[i + 2] = 0
-    layer.imageData.data[i + 3] = 255
-    layer.colorStats.r += r
-    layer.colorStats.g += g
-    layer.colorStats.b += b
+    labels[pixelIndex] = winner
+  }
+  smoothLabelMap(labels, width, height, {
+    passes: detail >= 7 ? 1 : 2,
+    lockedMask: backgroundMask,
+  })
+
+  const layers = Array.from({ length: clusterCount }, (_, index) => ({
+    index,
+    imageData: createBlankMask(width, height),
+    previewUrl: '',
+    colorStats: { r: 0, g: 0, b: 0, count: 0 },
+  }))
+  for (let pixelIndex = 0; pixelIndex < labels.length; pixelIndex += 1) {
+    const label = labels[pixelIndex]
+    if (label < 0 || label >= layers.length) continue
+    const idx = pixelIndex * 4
+    const layer = layers[label]
+    layer.imageData.data[idx] = 0
+    layer.imageData.data[idx + 1] = 0
+    layer.imageData.data[idx + 2] = 0
+    layer.imageData.data[idx + 3] = 255
+    layer.colorStats.r += source.data[idx]
+    layer.colorStats.g += source.data[idx + 1]
+    layer.colorStats.b += source.data[idx + 2]
     layer.colorStats.count += 1
   }
 
