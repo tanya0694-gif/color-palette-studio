@@ -1225,12 +1225,12 @@ function createTraceStyleStencilLayers(
     const hueDelta = Math.min(rawHueDelta, 360 - rawHueDelta)
     const huePenalty = (hueDelta / 180) * 70 * (sharedSaturation / 100)
 
-    const isPinkFamily = (h) => h >= 320 || h <= 20
-    const isPurpleFamily = (h) => h >= 245 && h <= 310
+    const isPinkFamily = (h) => h >= 310 || h <= 20
+    const isPurpleFamily = (h) => h >= 245 && h <= 300
     const familyMismatch =
       (isPinkFamily(sampleHsl.h) && isPurpleFamily(centroidHsl.h)) ||
       (isPurpleFamily(sampleHsl.h) && isPinkFamily(centroidHsl.h))
-    const familyPenalty = familyMismatch ? 22 * (sharedSaturation / 100) : 0
+    const familyPenalty = familyMismatch ? 120 * (sharedSaturation / 100) : 0
 
     return base + huePenalty + familyPenalty
   }
@@ -2444,10 +2444,10 @@ function mergeTraceLayersToTargetCount(layers = [], targetCount = 1) {
     const hsl = hexToHsl(layer?.colorHex || '#7E86C2') || { h: 0, s: 0, l: 50 }
     if (hsl.s < 14) return 'neutral'
     if (hsl.h >= 75 && hsl.h <= 170) return 'green'
-    if (hsl.h >= 245 && hsl.h <= 320) return 'purple'
+    if (hsl.h >= 245 && hsl.h <= 300) return 'purple'
     if (hsl.h >= 38 && hsl.h <= 72) return 'yellow'
     if (hsl.h >= 20 && hsl.h < 38) return 'orange'
-    if (hsl.h >= 330 || hsl.h <= 20) return 'pink'
+    if (hsl.h >= 310 || hsl.h <= 20) return 'pink'
     return 'other'
   }
   const initialFamilyCounts = working.reduce((acc, layer) => {
@@ -2484,6 +2484,9 @@ function mergeTraceLayersToTargetCount(layers = [], targetCount = 1) {
 
     const familyA = getFamily(a)
     const familyB = getFamily(b)
+    const pinkPurpleMismatch =
+      (familyA === 'pink' && familyB === 'purple') || (familyA === 'purple' && familyB === 'pink')
+    if (pinkPurpleMismatch) penalty += 2200
     const minA = protectedFamilyMinimums[familyA] || 0
     const minB = protectedFamilyMinimums[familyB] || 0
     const countA = familyCounts[familyA] || 0
