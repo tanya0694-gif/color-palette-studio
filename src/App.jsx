@@ -202,6 +202,89 @@ function rgbTripletDistance(r1, g1, b1, r2, g2, b2) {
   return Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2)
 }
 
+function buildConnectedEdgeBackgroundMask(
+  imageData,
+  { tolerance = 26, alphaThreshold = 20, minCoverage = 0.04, maxCoverage = 0.97 } = {},
+) {
+  if (!imageData?.data || !imageData.width || !imageData.height) return null
+  const { data, width, height } = imageData
+  const edgeStats = { r: 0, g: 0, b: 0, count: 0 }
+  const stride = Math.max(1, Math.round(Math.min(width, height) / 220))
+  const sampleEdgePixel = (x, y) => {
+    const idx = (y * width + x) * 4
+    if (data[idx + 3] <= alphaThreshold) return
+    edgeStats.r += data[idx]
+    edgeStats.g += data[idx + 1]
+    edgeStats.b += data[idx + 2]
+    edgeStats.count += 1
+  }
+
+  for (let x = 0; x < width; x += stride) {
+    sampleEdgePixel(x, 0)
+    sampleEdgePixel(x, height - 1)
+  }
+  for (let y = 0; y < height; y += stride) {
+    sampleEdgePixel(0, y)
+    sampleEdgePixel(width - 1, y)
+  }
+  if (!edgeStats.count) return null
+
+  const bg = {
+    r: edgeStats.r / edgeStats.count,
+    g: edgeStats.g / edgeStats.count,
+    b: edgeStats.b / edgeStats.count,
+  }
+  const bgTolerance = Math.max(8, Math.min(90, Number(tolerance) || 26))
+  const pixelCount = width * height
+  const visited = new Uint8Array(pixelCount)
+  const mask = new Uint8Array(pixelCount)
+  const queue = new Int32Array(pixelCount)
+  let qHead = 0
+  let qTail = 0
+
+  const maybePush = (x, y) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return
+    const pos = y * width + x
+    if (visited[pos]) return
+    visited[pos] = 1
+    const idx = pos * 4
+    if (data[idx + 3] <= alphaThreshold) return
+    const distance = rgbTripletDistance(data[idx], data[idx + 1], data[idx + 2], bg.r, bg.g, bg.b)
+    if (distance > bgTolerance) return
+    mask[pos] = 1
+    queue[qTail] = pos
+    qTail += 1
+  }
+
+  for (let x = 0; x < width; x += 1) {
+    maybePush(x, 0)
+    maybePush(x, height - 1)
+  }
+  for (let y = 0; y < height; y += 1) {
+    maybePush(0, y)
+    maybePush(width - 1, y)
+  }
+
+  while (qHead < qTail) {
+    const pos = queue[qHead]
+    qHead += 1
+    const x = pos % width
+    const y = Math.floor(pos / width)
+    maybePush(x - 1, y)
+    maybePush(x + 1, y)
+    maybePush(x, y - 1)
+    maybePush(x, y + 1)
+  }
+
+  let covered = 0
+  for (let i = 0; i < mask.length; i += 1) {
+    covered += mask[i]
+  }
+  const coverage = covered / pixelCount
+  if (coverage < minCoverage || coverage > maxCoverage) return null
+  return mask
+}
+
 async function extractPaletteFromImageFile(file, count = 5) {
   if (!file) throw new Error('Choose an image first.')
   const url = URL.createObjectURL(file)
@@ -486,6 +569,8 @@ function createStencilImageData(
     threshold = 140,
     invert = false,
     detail = 6,
+    removeBackground = true,
+    backgroundTolerance = 26,
     rotationDeg = 0,
     rectifyEnabled = false,
     rectifyCorners = DEFAULT_RECTIFY_CORNERS,
@@ -499,6 +584,9 @@ function createStencilImageData(
   if (!ctx) throw new Error('Could not create canvas context.')
   const imageData = ctx.getImageData(0, 0, width, height)
   const { data } = imageData
+  const backgroundMask = removeBackground
+    ? buildConnectedEdgeBackgroundMask(imageData, { tolerance: backgroundTolerance })
+    : null
   const quantizeStep = Math.max(1, Math.round((11 - Math.max(1, Math.min(10, detail))) * 2))
 
   for (let i = 0; i < data.length; i += 4) {
@@ -506,6 +594,14 @@ function createStencilImageData(
     const g = data[i + 1]
     const b = data[i + 2]
     const a = data[i + 3]
+    const pixelIndex = i / 4
+    if (backgroundMask && backgroundMask[pixelIndex]) {
+      data[i] = 255
+      data[i + 1] = 255
+      data[i + 2] = 255
+      data[i + 3] = 255
+      continue
+    }
     if (a < 15) {
       data[i] = 255
       data[i + 1] = 255
@@ -542,6 +638,8 @@ function createPosterizedStencilLayers(
     invert = false,
     detail = 6,
     colorSegmentation = false,
+    removeBackground = true,
+    backgroundTolerance = 26,
     rotationDeg = 0,
     rectifyEnabled = false,
     rectifyCorners = DEFAULT_RECTIFY_CORNERS,
@@ -555,6 +653,9 @@ function createPosterizedStencilLayers(
   if (!ctx) throw new Error('Could not create canvas context.')
 
   const source = ctx.getImageData(0, 0, width, height)
+  const backgroundMask = removeBackground
+    ? buildConnectedEdgeBackgroundMask(source, { tolerance: backgroundTolerance })
+    : null
   const steps = Math.max(1, Math.min(15, Math.round(layerCount)))
 
   const cropLayersToUnionContent = (rawLayers) => {
@@ -642,7 +743,8 @@ function createPosterizedStencilLayers(
             b: edgeStats.b / edgeStats.count,
           }
         : null
-    const isLikelyBackgroundPixel = (r, g, b, a) => {
+    const isLikelyBackgroundPixel = (r, g, b, a, pixelIndex = -1) => {
+      if (backgroundMask && pixelIndex >= 0 && backgroundMask[pixelIndex]) return true
       if (a < 24) return true
       const { s, l } = rgbToHslTuple(r, g, b)
       if (bgColor) {
@@ -663,7 +765,8 @@ function createPosterizedStencilLayers(
       const g = source.data[i + 1]
       const b = source.data[i + 2]
       const a = source.data[i + 3]
-      if (isLikelyBackgroundPixel(r, g, b, a)) continue
+      const pixelIndex = i / 4
+      if (isLikelyBackgroundPixel(r, g, b, a, pixelIndex)) continue
       const { h, s, l } = rgbToHslTuple(r, g, b)
       const isWarm = h >= 12 && h <= 58
       if (!isWarm || s < 32 || l < 18 || l > 86) continue
@@ -756,7 +859,8 @@ function createPosterizedStencilLayers(
       const g = source.data[i + 1]
       const b = source.data[i + 2]
       const a = source.data[i + 3]
-      if (isLikelyBackgroundPixel(r, g, b, a)) continue
+      const pixelIndex = i / 4
+      if (isLikelyBackgroundPixel(r, g, b, a, pixelIndex)) continue
       const rq = Math.round(r / bucketSize) * bucketSize
       const gq = Math.round(g / bucketSize) * bucketSize
       const bq = Math.round(b / bucketSize) * bucketSize
@@ -885,7 +989,8 @@ function createPosterizedStencilLayers(
       const g = source.data[i + 1]
       const b = source.data[i + 2]
       const a = source.data[i + 3]
-      if (isLikelyBackgroundPixel(r, g, b, a)) {
+      const pixelIndex = i / 4
+      if (isLikelyBackgroundPixel(r, g, b, a, pixelIndex)) {
         for (const layer of layers) {
           layer.imageData.data[i] = 255
           layer.imageData.data[i + 1] = 255
@@ -1011,6 +1116,17 @@ function createPosterizedStencilLayers(
     const g = source.data[i + 1]
     const b = source.data[i + 2]
     const a = source.data[i + 3]
+    const pixelIndex = i / 4
+    const backgroundPixel = Boolean(backgroundMask && backgroundMask[pixelIndex])
+    if (backgroundPixel) {
+      for (const layer of layers) {
+        layer.imageData.data[i] = 255
+        layer.imageData.data[i + 1] = 255
+        layer.imageData.data[i + 2] = 255
+        layer.imageData.data[i + 3] = 255
+      }
+      continue
+    }
     const grayRaw = a < 15 ? 255 : 0.299 * r + 0.587 * g + 0.114 * b
     const gray = invert ? 255 - grayRaw : grayRaw
 
@@ -1048,7 +1164,7 @@ function createPosterizedStencilLayers(
   return cropLayersToUnionContent(generated)
 }
 
-function detectTraceColorPalette(img, { maxColors = 15 } = {}) {
+function detectTraceColorPalette(img, { maxColors = 15, removeBackground = true, backgroundTolerance = 26 } = {}) {
   const rendered = renderImageToCanvas(img, { maxDim: 900, rotationDeg: 0 })
   const canvas = rendered.canvas
   const width = canvas.width
@@ -1056,6 +1172,9 @@ function detectTraceColorPalette(img, { maxColors = 15 } = {}) {
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) return []
   const source = ctx.getImageData(0, 0, width, height)
+  const backgroundMask = removeBackground
+    ? buildConnectedEdgeBackgroundMask(source, { tolerance: backgroundTolerance })
+    : null
 
   const toHsl = (r, g, b) => {
     const rn = r / 255
@@ -1137,6 +1256,8 @@ function detectTraceColorPalette(img, { maxColors = 15 } = {}) {
       const g = source.data[idx + 1]
       const b = source.data[idx + 2]
       const a = source.data[idx + 3]
+      const pixelIndex = idx / 4
+      if (backgroundMask && backgroundMask[pixelIndex]) continue
       if (isBackgroundPixel(r, g, b, a)) continue
       const rq = Math.round(r / quant) * quant
       const gq = Math.round(g / quant) * quant
@@ -1190,6 +1311,8 @@ function createTraceStyleStencilLayers(
     rectifyCorners = DEFAULT_RECTIFY_CORNERS,
     detail = 7,
     seedHexColors = [],
+    removeBackground = true,
+    backgroundTolerance = 26,
   } = {},
 ) {
   const rendered = renderImageToCanvas(img, { maxDim: 1200, rotationDeg })
@@ -1199,6 +1322,9 @@ function createTraceStyleStencilLayers(
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) throw new Error('Could not create canvas context.')
   const source = ctx.getImageData(0, 0, width, height)
+  const backgroundMask = removeBackground
+    ? buildConnectedEdgeBackgroundMask(source, { tolerance: backgroundTolerance })
+    : null
   const requestedClusterCount = Math.max(1, Math.min(15, Math.round(layerCount)))
 
   const rgbToHslTuple = (r, g, b) => {
@@ -1281,7 +1407,8 @@ function createTraceStyleStencilLayers(
     edgeStats.count > 0
       ? { r: edgeStats.r / edgeStats.count, g: edgeStats.g / edgeStats.count, b: edgeStats.b / edgeStats.count }
       : null
-  const isBackgroundPixel = (r, g, b, a) => {
+  const isBackgroundPixel = (r, g, b, a, pixelIndex = -1) => {
+    if (backgroundMask && pixelIndex >= 0 && backgroundMask[pixelIndex]) return true
     if (a < 18) return true
     const { s, l } = rgbToHslTuple(r, g, b)
     if (bgColor) {
@@ -1301,7 +1428,8 @@ function createTraceStyleStencilLayers(
       const g = source.data[idx + 1]
       const b = source.data[idx + 2]
       const a = source.data[idx + 3]
-      if (isBackgroundPixel(r, g, b, a)) continue
+      const pixelIndex = idx / 4
+      if (isBackgroundPixel(r, g, b, a, pixelIndex)) continue
       samples.push({ r, g, b })
     }
   }
@@ -1375,7 +1503,8 @@ function createTraceStyleStencilLayers(
     const g = source.data[i + 1]
     const b = source.data[i + 2]
     const a = source.data[i + 3]
-    if (isBackgroundPixel(r, g, b, a)) continue
+    const pixelIndex = i / 4
+    if (isBackgroundPixel(r, g, b, a, pixelIndex)) continue
     let winner = 0
     let winnerDistance = Number.POSITIVE_INFINITY
     for (let c = 0; c < centroids.length; c += 1) {
@@ -4950,6 +5079,37 @@ function StencilStudioPanel({
                 </label>
               ) : null}
 
+              {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
+                <label className="flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(stencilSettings.removeBackground)}
+                    onChange={(e) => onUpdateSetting('removeBackground', e.target.checked)}
+                    className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
+                  />
+                  Auto Remove Background
+                  <HelpTip text="Removes a large flat edge-connected backdrop (like a solid peach panel) before generating layers." />
+                </label>
+              ) : null}
+
+              {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) &&
+              Boolean(stencilSettings.removeBackground) ? (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                    <span>Background Tolerance ({Number(stencilSettings.backgroundTolerance || 26)})</span>
+                    <HelpTip text="Higher removes more near-background shades. Lower keeps more image pixels." />
+                  </div>
+                  <input
+                    type="range"
+                    min={8}
+                    max={90}
+                    value={Number(stencilSettings.backgroundTolerance || 26)}
+                    onChange={(e) => onUpdateSetting('backgroundTolerance', Number(e.target.value))}
+                    className="w-full accent-[#9678b8]"
+                  />
+                </div>
+              ) : null}
+
               {isLegacyGenerator ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
@@ -5703,6 +5863,8 @@ function App() {
     straightenAdjust: 0,
     invert: false,
     traceExtraColors: [],
+    removeBackground: true,
+    backgroundTolerance: 26,
   })
 
   useEffect(() => {
@@ -6173,7 +6335,11 @@ function App() {
     }
     try {
       const image = await loadImageFromFile(file)
-      const detected = detectTraceColorPalette(image, { maxColors: 15 })
+      const detected = detectTraceColorPalette(image, {
+        maxColors: 15,
+        removeBackground: Boolean(stencilSettings.removeBackground),
+        backgroundTolerance: Number(stencilSettings.backgroundTolerance || 26),
+      })
       setTraceDetectedColors(detected)
     } catch {
       setTraceDetectedColors([])
@@ -6197,6 +6363,10 @@ function App() {
         if (Array.isArray(next.traceExtraColors) && next.traceExtraColors.length > next.layerCount) {
           next.traceExtraColors = next.traceExtraColors.slice(0, next.layerCount)
         }
+      }
+      if (field === 'backgroundTolerance') {
+        const numeric = Number(value)
+        next.backgroundTolerance = Math.max(8, Math.min(90, Number.isFinite(numeric) ? numeric : 26))
       }
       return next
     })
@@ -6236,12 +6406,18 @@ function App() {
       const rotationDeg = autoRotationDeg + Number(stencilSettings.straightenAdjust || 0)
       setStencilStraightenAngle(rotationDeg)
       if (generatorType === 'trace') {
+        const detectedForRun = detectTraceColorPalette(image, {
+          maxColors: 15,
+          removeBackground: Boolean(stencilSettings.removeBackground),
+          backgroundTolerance: Number(stencilSettings.backgroundTolerance || 26),
+        })
+        setTraceDetectedColors(detectedForRun)
         const desiredTraceLayerCount = Math.max(1, Math.min(15, Math.round(Number(stencilSettings.layerCount) || 1)))
         const detectedTraceLayerCount = Math.max(
           desiredTraceLayerCount,
-          Math.min(15, Number(Array.isArray(traceDetectedColors) ? traceDetectedColors.length : 0) || 0),
+          Math.min(15, Number(Array.isArray(detectedForRun) ? detectedForRun.length : 0) || 0),
         )
-        const detectedSeedHexes = (Array.isArray(traceDetectedColors) ? traceDetectedColors : [])
+        const detectedSeedHexes = (Array.isArray(detectedForRun) ? detectedForRun : [])
           .map((entry) => normalizeHex(entry?.hex))
           .filter(Boolean)
         const lockedSeedHexes = (Array.isArray(stencilSettings.traceExtraColors) ? stencilSettings.traceExtraColors : [])
@@ -6255,6 +6431,8 @@ function App() {
           rectifyEnabled: stencilRectifyEnabled,
           rectifyCorners: stencilRectifyCorners,
           seedHexColors: traceSeedHexes,
+          removeBackground: Boolean(stencilSettings.removeBackground),
+          backgroundTolerance: Number(stencilSettings.backgroundTolerance || 26),
         })
         const tracedLayers = mergeTraceLayersToTargetCount(rawTraceLayers, desiredTraceLayerCount)
         const layerSvgs = tracedLayers.map((layer) => {
