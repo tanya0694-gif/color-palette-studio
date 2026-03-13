@@ -2593,6 +2593,36 @@ function combineBinaryLayerImageData(layerImageDatas = []) {
   return merged
 }
 
+function subtractBinaryLayerImageData(baseEntry, subtractEntries = []) {
+  const baseImageData = baseEntry?.imageData || baseEntry
+  const subtractImageDatas = (Array.isArray(subtractEntries) ? subtractEntries : [])
+    .map((entry) => entry?.imageData || entry)
+    .filter(Boolean)
+  if (!baseImageData?.data || !subtractImageDatas.length) return baseImageData || null
+
+  const { width, height } = baseImageData
+  const hasMatchingDimensions = subtractImageDatas.every(
+    (imageData) => imageData.width === width && imageData.height === height,
+  )
+  if (!hasMatchingDimensions) return baseImageData
+
+  const result = new ImageData(new Uint8ClampedArray(baseImageData.data), width, height)
+  for (let i = 0; i < result.data.length; i += 4) {
+    if (result.data[i] >= 220 && result.data[i + 1] >= 220 && result.data[i + 2] >= 220) continue
+    for (let index = 0; index < subtractImageDatas.length; index += 1) {
+      const subtractData = subtractImageDatas[index].data
+      if (subtractData[i] < 220 || subtractData[i + 1] < 220 || subtractData[i + 2] < 220) {
+        result.data[i] = 255
+        result.data[i + 1] = 255
+        result.data[i + 2] = 255
+        result.data[i + 3] = 255
+        break
+      }
+    }
+  }
+  return result
+}
+
 function countFilledPixels(imageData, threshold = 220) {
   if (!imageData?.data) return 0
   let count = 0
@@ -6779,17 +6809,39 @@ function App() {
         return prev
       }
       const buckets = splitLayersIntoToneBuckets(eligible, overrides)
+      const mergedLight = combineBinaryLayerImageData(buckets.light || [])
+      const mergedMidRaw = combineBinaryLayerImageData(buckets.mid || [])
+      const mergedDarkRaw = combineBinaryLayerImageData(buckets.dark || [])
+      const mergedFoliageLight = combineBinaryLayerImageData(buckets.foliageLight || [])
+      const mergedFoliageDarkRaw = combineBinaryLayerImageData(buckets.foliageDark || [])
+      const mergedMid = mergedMidRaw ? subtractBinaryLayerImageData(mergedMidRaw, [mergedLight]) : null
+      const mergedDark = mergedDarkRaw
+        ? subtractBinaryLayerImageData(mergedDarkRaw, [mergedLight, mergedMid])
+        : null
+      const mergedFoliageDark = mergedFoliageDarkRaw
+        ? subtractBinaryLayerImageData(mergedFoliageDarkRaw, [mergedFoliageLight])
+        : null
       const entries = [
-        { key: 'foliageLight', label: 'Foliage Light Plate', layers: buckets.foliageLight || [] },
-        { key: 'foliageDark', label: 'Foliage Dark Plate', layers: buckets.foliageDark || [] },
-        { key: 'light', label: 'Flower Light Plate', layers: buckets.light },
-        { key: 'mid', label: 'Flower Mid Plate', layers: buckets.mid },
-        { key: 'dark', label: 'Flower Dark Plate', layers: buckets.dark },
+        {
+          key: 'foliageLight',
+          label: 'Foliage Light Plate',
+          layers: buckets.foliageLight || [],
+          mergedImageData: mergedFoliageLight,
+        },
+        {
+          key: 'foliageDark',
+          label: 'Foliage Dark Plate',
+          layers: buckets.foliageDark || [],
+          mergedImageData: mergedFoliageDark,
+        },
+        { key: 'light', label: 'Flower Light Plate', layers: buckets.light, mergedImageData: mergedLight },
+        { key: 'mid', label: 'Flower Mid Plate', layers: buckets.mid, mergedImageData: mergedMid },
+        { key: 'dark', label: 'Flower Dark Plate', layers: buckets.dark, mergedImageData: mergedDark },
       ]
       const grouped = entries
         .map((entry, index) => {
           if (!entry.layers.length) return null
-          const mergedImageData = combineBinaryLayerImageData(entry.layers)
+          const mergedImageData = entry.mergedImageData || combineBinaryLayerImageData(entry.layers)
           if (!mergedImageData) return null
           const rawSvg = buildStencilSvg(mergedImageData, {
             ...stencilSettings,
