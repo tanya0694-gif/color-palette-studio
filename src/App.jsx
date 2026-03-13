@@ -1863,6 +1863,36 @@ function removeConnectedComponentAtPoint(imageData, x, y, threshold = 128) {
   return result
 }
 
+function eraseBinaryMaskAtPoint(imageData, x, y, radius = 12, threshold = 128) {
+  if (!imageData?.data) return null
+  const { data, width, height } = imageData
+  const xi = Math.max(0, Math.min(width - 1, Math.round(x)))
+  const yi = Math.max(0, Math.min(height - 1, Math.round(y)))
+  const brushRadius = Math.max(1, Math.round(radius))
+  const radiusSquared = brushRadius * brushRadius
+  const result = new ImageData(new Uint8ClampedArray(data), width, height)
+  const out = result.data
+  let changed = false
+
+  for (let oy = -brushRadius; oy <= brushRadius; oy += 1) {
+    for (let ox = -brushRadius; ox <= brushRadius; ox += 1) {
+      if (ox * ox + oy * oy > radiusSquared) continue
+      const px = xi + ox
+      const py = yi + oy
+      if (px < 0 || py < 0 || px >= width || py >= height) continue
+      const idx = (py * width + px) * 4
+      if (out[idx] >= threshold && out[idx + 1] >= threshold && out[idx + 2] >= threshold) continue
+      out[idx] = 255
+      out[idx + 1] = 255
+      out[idx + 2] = 255
+      out[idx + 3] = 255
+      changed = true
+    }
+  }
+
+  return changed ? result : null
+}
+
 function estimateBinaryMaskAngle(imageData) {
   const { data, width, height } = imageData
   let count = 0
@@ -4169,6 +4199,7 @@ function StencilStudioPanel({
   onMergeLayers,
   onDeleteLayer,
   onDeleteShapeFromLayer,
+  onEraseLayerArea,
   onUndoLayerEdit,
   canUndoLayerEdit,
   onResetLayerEdits,
@@ -4195,9 +4226,13 @@ function StencilStudioPanel({
   const [layerPreviewMode, setLayerPreviewMode] = useState('elements')
   const [toneOverrides, setToneOverrides] = useState({})
   const [editingLayerKey, setEditingLayerKey] = useState(null)
+  const [editTool, setEditTool] = useState('blob')
+  const [eraseBrushSize, setEraseBrushSize] = useState(18)
+  const [isEraseDrawing, setIsEraseDrawing] = useState(false)
   const vectorPanStateRef = useRef(null)
   const previewImageRef = useRef(null)
   const editVectorImageRef = useRef(null)
+  const eraseStrokeActiveRef = useRef(false)
   const splitSamplerCanvasRef = useRef(null)
   const [isVectorPanning, setIsVectorPanning] = useState(false)
   const compositePreviewSvg = useMemo(
@@ -4289,6 +4324,13 @@ function StencilStudioPanel({
   }, [stencilLayers, editingLayerKey])
 
   useEffect(() => {
+    if (editingLayerKey) return
+    eraseStrokeActiveRef.current = false
+    setIsEraseDrawing(false)
+    setEditTool('blob')
+  }, [editingLayerKey])
+
+  useEffect(() => {
     if (!focusedLayerKey) return
     const exists = stencilLayers.some((layer) => String(layer?.index) === String(focusedLayerKey))
     if (!exists) setFocusedLayerKey(null)
@@ -4314,7 +4356,7 @@ function StencilStudioPanel({
   }
 
   function handleVectorShapeDelete(event) {
-    if (!onDeleteShapeFromLayer || !editingLayer || !editVectorImageRef.current) return
+    if (!editingLayer || !editVectorImageRef.current) return
     const image = editVectorImageRef.current
     const bounds = image.getBoundingClientRect()
     if (!bounds.width || !bounds.height || !image.naturalWidth || !image.naturalHeight) return
@@ -4348,7 +4390,36 @@ function StencilStudioPanel({
 
     const xNorm = (localX - offsetX) / drawWidth
     const yNorm = (localY - offsetY) / drawHeight
-    onDeleteShapeFromLayer(editingLayer, xNorm, yNorm)
+    if (editTool === 'erase') {
+      const radiusNorm = eraseBrushSize / Math.max(image.naturalWidth, image.naturalHeight)
+      onEraseLayerArea?.(editingLayer, xNorm, yNorm, radiusNorm, {
+        skipHistory: eraseStrokeActiveRef.current,
+      })
+      eraseStrokeActiveRef.current = true
+      setIsEraseDrawing(true)
+      return
+    }
+    onDeleteShapeFromLayer?.(editingLayer, xNorm, yNorm)
+  }
+
+  function handleEditPointerDown(event) {
+    if (editTool !== 'erase') {
+      handleVectorShapeDelete(event)
+      return
+    }
+    if (event.button !== undefined && event.button !== 0) return
+    eraseStrokeActiveRef.current = false
+    handleVectorShapeDelete(event)
+  }
+
+  function handleEditPointerMove(event) {
+    if (editTool !== 'erase' || !isEraseDrawing) return
+    handleVectorShapeDelete(event)
+  }
+
+  function handleEditPointerEnd() {
+    eraseStrokeActiveRef.current = false
+    setIsEraseDrawing(false)
   }
 
   const getPointerPoint = (event) => {
@@ -5670,9 +5741,45 @@ function StencilStudioPanel({
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[#d7c7ee] bg-[#fff8f8] px-3 py-2 text-xs text-[#8a5555]">
                 <p>
                   Editing shapes in <span className="font-semibold">{editingLayer.name || `Layer ${editingLayer.index + 1}`}</span>.
-                  Click a blob in the preview below to remove only that connected shape from this layer. If two shapes were connected, use undo immediately.
+                  {editTool === 'erase'
+                    ? ' Drag or click below to erase a small local patch from this layer.'
+                    : ' Click a blob below to remove only that connected shape from this layer. If two shapes were connected, use undo immediately.'}
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex rounded-md border border-[#ead0d0] bg-white p-1">
+                    <button
+                      type="button"
+                      onClick={() => setEditTool('blob')}
+                      className={`rounded px-2 py-1 text-[11px] font-semibold ${
+                        editTool === 'blob' ? 'bg-[#e8d7ef] text-[#6a477d]' : 'text-[#8a5555] hover:bg-[#fff0f0]'
+                      }`}
+                    >
+                      Blob Delete
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditTool('erase')}
+                      className={`rounded px-2 py-1 text-[11px] font-semibold ${
+                        editTool === 'erase' ? 'bg-[#e8d7ef] text-[#6a477d]' : 'text-[#8a5555] hover:bg-[#fff0f0]'
+                      }`}
+                    >
+                      Eraser
+                    </button>
+                  </div>
+                  {editTool === 'erase' ? (
+                    <label className="flex items-center gap-2 rounded-md border border-[#ead0d0] bg-white px-2 py-1">
+                      <span className="text-[11px] font-semibold text-[#8a5555]">Brush {eraseBrushSize}px</span>
+                      <input
+                        type="range"
+                        min={6}
+                        max={48}
+                        step={2}
+                        value={eraseBrushSize}
+                        onChange={(e) => setEraseBrushSize(Number(e.target.value))}
+                        className="w-24 accent-[#a58bc4]"
+                      />
+                    </label>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => onUndoLayerEdit?.(editingLayer)}
@@ -5699,15 +5806,19 @@ function StencilStudioPanel({
               </div>
               <button
                 type="button"
-                onClick={handleVectorShapeDelete}
+                onPointerDown={handleEditPointerDown}
+                onPointerMove={handleEditPointerMove}
+                onPointerUp={handleEditPointerEnd}
+                onPointerCancel={handleEditPointerEnd}
+                onPointerLeave={handleEditPointerEnd}
                 className="block h-[420px] w-full overflow-hidden rounded-lg border border-[#e8d9cf] bg-white p-2"
-                title="Click a shape to delete it from this layer"
+                title={editTool === 'erase' ? 'Drag to erase a local area from this layer' : 'Click a shape to delete it from this layer'}
               >
                 <img
                   ref={editVectorImageRef}
                   src={editingLayer.previewUrl}
                   alt={`Edit shapes for ${editingLayer.name || `Layer ${editingLayer.index + 1}`}`}
-                  className="h-full w-full object-contain"
+                  className={`h-full w-full object-contain ${editTool === 'erase' ? 'cursor-crosshair' : 'cursor-pointer'}`}
                 />
               </button>
             </div>
@@ -7227,28 +7338,32 @@ function App() {
     })
   }
 
-  function deleteShapeFromStencilLayer(layerInput, xNorm, yNorm) {
+  function updateStencilLayerImageData(layerInput, buildNextImageData, options = {}) {
     const layerKey = String(layerInput?.index ?? '')
     if (!layerKey) return
     setStencilLayers((prev) => {
       let changed = false
       const next = prev.map((layer) => {
         if (String(layer?.index) !== layerKey || !layer?.imageData) return layer
-        const px = Math.max(0, Math.min(layer.imageData.width - 1, Math.round(xNorm * (layer.imageData.width - 1))))
-        const py = Math.max(0, Math.min(layer.imageData.height - 1, Math.round(yNorm * (layer.imageData.height - 1))))
-        setStencilLayerEditHistory((history) => ({
-          ...history,
-          [layerKey]: [
-            ...(Array.isArray(history[layerKey]) ? history[layerKey] : []),
-            {
-              imageData: new ImageData(new Uint8ClampedArray(layer.imageData.data), layer.imageData.width, layer.imageData.height),
-              previewUrl: layer.previewUrl,
-              svg: layer.svg,
-            },
-          ],
-        }))
-        const nextImageData = removeConnectedComponentAtPoint(layer.imageData, px, py)
+        const nextImageData = buildNextImageData(layer)
         if (!nextImageData) return layer
+        if (!options.skipHistory) {
+          setStencilLayerEditHistory((history) => ({
+            ...history,
+            [layerKey]: [
+              ...(Array.isArray(history[layerKey]) ? history[layerKey] : []),
+              {
+                imageData: new ImageData(
+                  new Uint8ClampedArray(layer.imageData.data),
+                  layer.imageData.width,
+                  layer.imageData.height,
+                ),
+                previewUrl: layer.previewUrl,
+                svg: layer.svg,
+              },
+            ],
+          }))
+        }
         const rawSvg = buildStencilSvg(nextImageData, {
           ...stencilSettings,
           noiseFilter: Math.max(10, Number(stencilSettings.noiseFilter || 0)),
@@ -7274,6 +7389,30 @@ function App() {
       }
       return next
     })
+  }
+
+  function deleteShapeFromStencilLayer(layerInput, xNorm, yNorm) {
+    updateStencilLayerImageData(layerInput, (layer) => {
+      const px = Math.max(0, Math.min(layer.imageData.width - 1, Math.round(xNorm * (layer.imageData.width - 1))))
+      const py = Math.max(0, Math.min(layer.imageData.height - 1, Math.round(yNorm * (layer.imageData.height - 1))))
+      return removeConnectedComponentAtPoint(layer.imageData, px, py)
+    })
+  }
+
+  function eraseStencilLayerArea(layerInput, xNorm, yNorm, radiusNorm = 0.02, options = {}) {
+    updateStencilLayerImageData(
+      layerInput,
+      (layer) => {
+        const px = Math.max(0, Math.min(layer.imageData.width - 1, Math.round(xNorm * (layer.imageData.width - 1))))
+        const py = Math.max(0, Math.min(layer.imageData.height - 1, Math.round(yNorm * (layer.imageData.height - 1))))
+        const radiusPx = Math.max(
+          2,
+          Math.round((Number(radiusNorm) || 0.02) * Math.max(layer.imageData.width, layer.imageData.height)),
+        )
+        return eraseBinaryMaskAtPoint(layer.imageData, px, py, radiusPx)
+      },
+      options,
+    )
   }
 
   function undoStencilLayerEdit(layerInput) {
@@ -8526,6 +8665,7 @@ function App() {
           onMergeLayers={combineStencilLayers}
           onDeleteLayer={deleteStencilLayer}
           onDeleteShapeFromLayer={deleteShapeFromStencilLayer}
+          onEraseLayerArea={eraseStencilLayerArea}
           onUndoLayerEdit={undoStencilLayerEdit}
           canUndoLayerEdit={canUndoStencilLayerEdit}
           onResetLayerEdits={resetStencilLayerEdits}
