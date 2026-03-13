@@ -1791,6 +1791,78 @@ function fillSmallBinaryHoles(imageData, maxHoleArea = 20) {
   invertBinaryMask(imageData)
 }
 
+function removeConnectedComponentAtPoint(imageData, x, y, threshold = 128) {
+  if (!imageData?.data) return null
+  const { data, width, height } = imageData
+  const xi = Math.max(0, Math.min(width - 1, Math.round(x)))
+  const yi = Math.max(0, Math.min(height - 1, Math.round(y)))
+
+  const isFilled = (px, py) => {
+    const idx = (py * width + px) * 4
+    return data[idx] < threshold || data[idx + 1] < threshold || data[idx + 2] < threshold
+  }
+
+  let startX = xi
+  let startY = yi
+  if (!isFilled(startX, startY)) {
+    let found = false
+    for (let radius = 1; radius <= 8 && !found; radius += 1) {
+      for (let oy = -radius; oy <= radius && !found; oy += 1) {
+        for (let ox = -radius; ox <= radius; ox += 1) {
+          const nx = startX + ox
+          const ny = startY + oy
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue
+          if (isFilled(nx, ny)) {
+            startX = nx
+            startY = ny
+            found = true
+            break
+          }
+        }
+      }
+    }
+    if (!found) return null
+  }
+
+  const result = new ImageData(new Uint8ClampedArray(data), width, height)
+  const out = result.data
+  const visited = new Uint8Array(width * height)
+  const queue = [[startX, startY]]
+  visited[startY * width + startX] = 1
+  const offsets = [
+    [-1, 0],
+    [1, 0],
+    [0, -1],
+    [0, 1],
+    [-1, -1],
+    [1, -1],
+    [-1, 1],
+    [1, 1],
+  ]
+
+  while (queue.length) {
+    const [cx, cy] = queue.shift()
+    const idx = (cy * width + cx) * 4
+    out[idx] = 255
+    out[idx + 1] = 255
+    out[idx + 2] = 255
+    out[idx + 3] = 255
+    for (let i = 0; i < offsets.length; i += 1) {
+      const nx = cx + offsets[i][0]
+      const ny = cy + offsets[i][1]
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue
+      const pos = ny * width + nx
+      if (visited[pos]) continue
+      visited[pos] = 1
+      const nIdx = pos * 4
+      if (out[nIdx] >= threshold && out[nIdx + 1] >= threshold && out[nIdx + 2] >= threshold) continue
+      queue.push([nx, ny])
+    }
+  }
+
+  return result
+}
+
 function estimateBinaryMaskAngle(imageData) {
   const { data, width, height } = imageData
   let count = 0
@@ -4096,6 +4168,7 @@ function StencilStudioPanel({
   onDownloadAllLayers,
   onMergeLayers,
   onDeleteLayer,
+  onDeleteShapeFromLayer,
   onRemoveLayerAndFill,
   onAutoGroupByTone,
   onSaveToLibrary,
@@ -4118,6 +4191,7 @@ function StencilStudioPanel({
   const [focusedToneGroup, setFocusedToneGroup] = useState('none')
   const [layerPreviewMode, setLayerPreviewMode] = useState('elements')
   const [toneOverrides, setToneOverrides] = useState({})
+  const [editingLayerKey, setEditingLayerKey] = useState(null)
   const vectorPanStateRef = useRef(null)
   const previewImageRef = useRef(null)
   const splitSamplerCanvasRef = useRef(null)
@@ -4200,6 +4274,12 @@ function StencilStudioPanel({
   }, [stencilLayers])
 
   useEffect(() => {
+    if (!editingLayerKey) return
+    const exists = stencilLayers.some((layer) => String(layer?.index) === String(editingLayerKey))
+    if (!exists) setEditingLayerKey(null)
+  }, [stencilLayers, editingLayerKey])
+
+  useEffect(() => {
     if (!focusedLayerKey) return
     const exists = stencilLayers.some((layer) => String(layer?.index) === String(focusedLayerKey))
     if (!exists) setFocusedLayerKey(null)
@@ -4223,6 +4303,17 @@ function StencilStudioPanel({
     onMergeLayers(selectedLayerKeys)
     setSelectedLayerKeys([])
   }
+
+  function handleLayerShapeDelete(layer, event) {
+    if (!onDeleteShapeFromLayer || String(editingLayerKey) !== String(layer?.index)) return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    if (!bounds.width || !bounds.height) return
+    const point = getPointerPoint(event)
+    const xNorm = Math.max(0, Math.min(1, (point.clientX - bounds.left) / bounds.width))
+    const yNorm = Math.max(0, Math.min(1, (point.clientY - bounds.top) / bounds.height))
+    onDeleteShapeFromLayer(layer, xNorm, yNorm)
+  }
+
   const getPointerPoint = (event) => {
     if (event?.touches?.[0]) return event.touches[0]
     if (event?.changedTouches?.[0]) return event.changedTouches[0]
@@ -5659,7 +5750,20 @@ function StencilStudioPanel({
                   </label>
                   <p className="text-sm font-medium text-[#5c4a3d]">{layer.name || `Layer ${layer.index + 1}`}</p>
                   <p className="mb-2 text-xs text-[#8b7b6b]">{layer.hint || `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`}</p>
-                  {layer.svg ? (
+                  {String(editingLayerKey) === String(layer.index) && layer.previewUrl ? (
+                    <button
+                      type="button"
+                      onClick={(event) => handleLayerShapeDelete(layer, event)}
+                      className="mb-2 block h-36 w-full overflow-hidden rounded-md border border-[#cfaeae] bg-white p-1"
+                      title="Click a shape to delete it from this layer"
+                    >
+                      <img
+                        alt={`Edit shapes for layer ${layer.index + 1}`}
+                        src={layer.previewUrl}
+                        className="h-full w-full object-contain"
+                      />
+                    </button>
+                  ) : layer.svg ? (
                     <div
                       className="mb-2 h-36 w-full overflow-hidden rounded-md border border-[#eee5db] bg-white p-1 [&_svg]:h-full [&_svg]:w-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:!overflow-visible"
                       dangerouslySetInnerHTML={{
@@ -5737,6 +5841,15 @@ function StencilStudioPanel({
                     className="mt-2 w-full rounded-md border border-[#ead0d0] bg-[#fff7f7] px-3 py-1.5 text-xs font-medium text-[#8a5555] hover:bg-[#fff0f0]"
                   >
                     Delete Layer
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditingLayerKey((prev) => (String(prev) === String(layer.index) ? null : String(layer.index)))
+                    }
+                    className="mt-2 w-full rounded-md border border-[#d7c7ee] bg-[#fffdfd] px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd]"
+                  >
+                    {String(editingLayerKey) === String(layer.index) ? 'Done Editing Shapes' : 'Edit Shapes'}
                   </button>
                   <button
                     type="button"
@@ -6986,6 +7099,44 @@ function App() {
     })
   }
 
+  function deleteShapeFromStencilLayer(layerInput, xNorm, yNorm) {
+    const layerKey = String(layerInput?.index ?? '')
+    if (!layerKey) return
+    setStencilLayers((prev) => {
+      let changed = false
+      const next = prev.map((layer) => {
+        if (String(layer?.index) !== layerKey || !layer?.imageData) return layer
+        const px = Math.max(0, Math.min(layer.imageData.width - 1, Math.round(xNorm * (layer.imageData.width - 1))))
+        const py = Math.max(0, Math.min(layer.imageData.height - 1, Math.round(yNorm * (layer.imageData.height - 1))))
+        const nextImageData = removeConnectedComponentAtPoint(layer.imageData, px, py)
+        if (!nextImageData) return layer
+        const rawSvg = buildStencilSvg(nextImageData, {
+          ...stencilSettings,
+          noiseFilter: Math.max(10, Number(stencilSettings.noiseFilter || 0)),
+        })
+        const svg = wrapSvgForStencilCanvas(rawSvg, {
+          paperSize: stencilSettings.paperSize,
+          orientation: stencilSettings.orientation,
+          mode: 'multi',
+        })
+        changed = true
+        return {
+          ...layer,
+          imageData: nextImageData,
+          previewUrl: imageDataToDataUrl(nextImageData),
+          svg,
+        }
+      })
+      if (!changed) return prev
+      const currentFocused = next.find((layer) => String(layer?.index) === layerKey)
+      if (currentFocused?.svg) {
+        setStencilSvg(currentFocused.svg)
+        setStencilProcessedPreviewUrl(currentFocused.previewUrl || '')
+      }
+      return next
+    })
+  }
+
   function removeStencilLayerAndFill(layerInput) {
     const layerKey = String(layerInput?.index ?? '')
     if (!layerKey) return
@@ -8164,6 +8315,7 @@ function App() {
           onDownloadAllLayers={downloadAllStencilLayerSvgs}
           onMergeLayers={combineStencilLayers}
           onDeleteLayer={deleteStencilLayer}
+          onDeleteShapeFromLayer={deleteShapeFromStencilLayer}
           onRemoveLayerAndFill={removeStencilLayerAndFill}
           onAutoGroupByTone={autoGroupStencilLayersByTone}
           onSaveToLibrary={saveStencilToLibrary}
