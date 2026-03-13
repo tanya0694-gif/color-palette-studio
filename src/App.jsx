@@ -4095,6 +4095,7 @@ function StencilStudioPanel({
   onDownloadLayerSvg,
   onDownloadAllLayers,
   onMergeLayers,
+  onDeleteLayer,
   onRemoveLayerAndFill,
   onAutoGroupByTone,
   onSaveToLibrary,
@@ -5732,6 +5733,13 @@ function StencilStudioPanel({
                   </button>
                   <button
                     type="button"
+                    onClick={() => onDeleteLayer?.(layer)}
+                    className="mt-2 w-full rounded-md border border-[#ead0d0] bg-[#fff7f7] px-3 py-1.5 text-xs font-medium text-[#8a5555] hover:bg-[#fff0f0]"
+                  >
+                    Delete Layer
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => onRemoveLayerAndFill?.(layer)}
                     className="mt-2 w-full rounded-md border border-[#e8d9cf] bg-white px-3 py-1.5 text-xs font-medium text-[#7f5f4e] hover:bg-[#fcf6f2]"
                   >
@@ -6967,6 +6975,17 @@ function App() {
     })
   }
 
+  function deleteStencilLayer(layerInput) {
+    const layerKey = String(layerInput?.index ?? '')
+    if (!layerKey) return
+    setStencilLayers((prev) => {
+      const next = prev.filter((layer) => String(layer?.index) !== layerKey)
+      setStencilSvg(next[0]?.svg || '')
+      setStencilProcessedPreviewUrl(next[0]?.previewUrl || '')
+      return next
+    })
+  }
+
   function removeStencilLayerAndFill(layerInput) {
     const layerKey = String(layerInput?.index ?? '')
     if (!layerKey) return
@@ -8144,6 +8163,7 @@ function App() {
           onDownloadLayerSvg={downloadStencilLayerSvg}
           onDownloadAllLayers={downloadAllStencilLayerSvgs}
           onMergeLayers={combineStencilLayers}
+          onDeleteLayer={deleteStencilLayer}
           onRemoveLayerAndFill={removeStencilLayerAndFill}
           onAutoGroupByTone={autoGroupStencilLayersByTone}
           onSaveToLibrary={saveStencilToLibrary}
