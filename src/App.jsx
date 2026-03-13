@@ -4175,7 +4175,14 @@ function StencilStudioPanel({
       : 'Download Elements SVG'
   const vectorZoomLabel = `${Math.round(vectorZoom * 100)}%`
   const extraTraceColors = Array.isArray(stencilSettings.traceExtraColors) ? stencilSettings.traceExtraColors : []
-  const detectedTraceCount = Array.isArray(traceDetectedColors) ? traceDetectedColors.length : 0
+  const excludedTraceColors = Array.isArray(stencilSettings.traceExcludedColors) ? stencilSettings.traceExcludedColors : []
+  const filteredDetectedTraceColors = Array.isArray(traceDetectedColors)
+    ? traceDetectedColors.filter((entry) => {
+        const hex = normalizeHex(entry?.hex)
+        return hex && !excludedTraceColors.includes(hex)
+      })
+    : []
+  const detectedTraceCount = filteredDetectedTraceColors.length
 
   useEffect(() => {
     setSelectedLayerKeys([])
@@ -4305,7 +4312,7 @@ function StencilStudioPanel({
     if (!extraTraceColors.length) return
     const validCurrent = normalizeHex(traceColorInput)
     if (validCurrent && !extraTraceColors.includes(validCurrent)) return
-    const firstAvailable = (traceDetectedColors || []).find((entry) => {
+    const firstAvailable = filteredDetectedTraceColors.find((entry) => {
       const hex = normalizeHex(entry?.hex)
       return hex && !extraTraceColors.includes(hex)
     })
@@ -4314,7 +4321,7 @@ function StencilStudioPanel({
     } else {
       setTraceColorInput('#FF9900')
     }
-  }, [traceDetectedColors, extraTraceColors, traceColorInput])
+  }, [filteredDetectedTraceColors, extraTraceColors, traceColorInput])
 
   function HelpTip({ text }) {
     const [open, setOpen] = useState(false)
@@ -5083,40 +5090,80 @@ function StencilStudioPanel({
                       Use Count
                     </button>
                   </div>
-                  {detectedTraceCount ? (
+                  {filteredDetectedTraceColors.length ? (
                     <div className="flex flex-wrap gap-1.5">
-                      {traceDetectedColors.map((entry, index) => {
+                      {filteredDetectedTraceColors.map((entry, index) => {
                         const hex = normalizeHex(entry?.hex) || '#7E86C2'
                         const selected = extraTraceColors.includes(hex)
                         return (
-                          <button
+                          <div
                             key={`detected-color-${hex}-${index}`}
-                            type="button"
-                            onClick={() =>
-                              onUpdateSetting(
-                                'traceExtraColors',
-                                selected
-                                  ? extraTraceColors.filter((value) => value !== hex)
-                                  : [...extraTraceColors, hex].slice(0, 15),
-                              )
-                            }
                             className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] ${
                               selected ? 'border-[#9c82c0] bg-white text-[#4f3e6b]' : 'border-[#d7c7ee] bg-[#fcf9ff] text-[#6b5b4f]'
                             }`}
-                            title={hex}
                           >
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onUpdateSetting(
+                                  'traceExtraColors',
+                                  selected
+                                    ? extraTraceColors.filter((value) => value !== hex)
+                                    : [...extraTraceColors, hex].slice(0, 15),
+                                )
+                              }
+                              className="inline-flex items-center gap-1"
+                              title={`${hex} - click to ${selected ? 'unlock' : 'lock'} this color`}
+                            >
                             <span
                               className="h-3.5 w-3.5 rounded-full border border-[#b9a9d4]"
                               style={{ backgroundColor: hex }}
                             />
                             <span>{hex}</span>
-                          </button>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onUpdateSetting('traceExcludedColors', [...excludedTraceColors, hex].slice(0, 15))
+                              }
+                              className="rounded px-1 text-[10px] font-semibold text-[#8a6f64] hover:bg-white"
+                              title={`Ignore ${hex}`}
+                              aria-label={`Ignore ${hex}`}
+                            >
+                              x
+                            </button>
+                          </div>
                         )
                       })}
                     </div>
                   ) : (
                     <p className="text-[11px] text-[#7f7468]">Upload an image to detect colors.</p>
                   )}
+                  {excludedTraceColors.length ? (
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-[#8b7b6b]">Ignored Colors</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {excludedTraceColors.map((hex, idx) => (
+                          <button
+                            key={`excluded-trace-color-${hex}-${idx}`}
+                            type="button"
+                            onClick={() =>
+                              onUpdateSetting(
+                                'traceExcludedColors',
+                                excludedTraceColors.filter((_, valueIdx) => valueIdx !== idx),
+                              )
+                            }
+                            className="inline-flex items-center gap-1 rounded-md border border-[#e3d7cf] bg-[#fff8f5] px-1.5 py-1 text-[11px] text-[#8a6f64] hover:bg-white"
+                            title="Restore"
+                          >
+                            <span className="h-3.5 w-3.5 rounded-full border border-[#cdb9aa]" style={{ backgroundColor: hex }} />
+                            <span>{hex}</span>
+                            <span aria-hidden="true">+</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                   <div className="space-y-2">
                     <p className="text-[11px] font-semibold uppercase tracking-wider text-[#8b7b6b]">Missing Colors To Keep</p>
                     <div className="flex items-center gap-2">
@@ -5971,6 +6018,7 @@ function App() {
     straightenAdjust: 0,
     invert: false,
     traceExtraColors: [],
+    traceExcludedColors: [],
     removeBackground: true,
     backgroundTolerance: 26,
   })
@@ -6420,6 +6468,7 @@ function App() {
   async function handleStencilImageFileChange(file) {
     setStencilError('')
     setStencilImageFile(file || null)
+    setStencilSettings((prev) => ({ ...prev, traceExcludedColors: [] }))
     setStencilSourceDataUrl('')
     setStencilStraightenAngle(0)
     setStencilRectifyCorners(DEFAULT_RECTIFY_CORNERS)
@@ -6448,7 +6497,12 @@ function App() {
         removeBackground: Boolean(stencilSettings.removeBackground),
         backgroundTolerance: Number(stencilSettings.backgroundTolerance || 26),
       })
-      setTraceDetectedColors(detected)
+      const excluded = new Set(
+        (Array.isArray(stencilSettings.traceExcludedColors) ? stencilSettings.traceExcludedColors : [])
+          .map((hex) => normalizeHex(hex))
+          .filter(Boolean),
+      )
+      setTraceDetectedColors(detected.filter((entry) => !excluded.has(normalizeHex(entry?.hex))))
     } catch {
       setTraceDetectedColors([])
     }
@@ -6464,6 +6518,13 @@ function App() {
       if (field === 'traceExtraColors') {
         const cleaned = [...new Set((Array.isArray(value) ? value : []).map((hex) => normalizeHex(hex)).filter(Boolean))]
         next.traceExtraColors = cleaned
+      }
+      if (field === 'traceExcludedColors') {
+        const cleaned = [...new Set((Array.isArray(value) ? value : []).map((hex) => normalizeHex(hex)).filter(Boolean))]
+        next.traceExcludedColors = cleaned
+        if (Array.isArray(next.traceExtraColors) && next.traceExtraColors.length) {
+          next.traceExtraColors = next.traceExtraColors.filter((hex) => !cleaned.includes(hex))
+        }
       }
       if (field === 'layerCount') {
         const numeric = Number(value)
@@ -6519,13 +6580,19 @@ function App() {
           removeBackground: Boolean(stencilSettings.removeBackground),
           backgroundTolerance: Number(stencilSettings.backgroundTolerance || 26),
         })
-        setTraceDetectedColors(detectedForRun)
+        const excluded = new Set(
+          (Array.isArray(stencilSettings.traceExcludedColors) ? stencilSettings.traceExcludedColors : [])
+            .map((hex) => normalizeHex(hex))
+            .filter(Boolean),
+        )
+        const filteredDetectedForRun = detectedForRun.filter((entry) => !excluded.has(normalizeHex(entry?.hex)))
+        setTraceDetectedColors(filteredDetectedForRun)
         const desiredTraceLayerCount = Math.max(1, Math.min(15, Math.round(Number(stencilSettings.layerCount) || 1)))
         const detectedTraceLayerCount = Math.max(
           desiredTraceLayerCount,
-          Math.min(15, Number(Array.isArray(detectedForRun) ? detectedForRun.length : 0) || 0),
+          Math.min(15, Number(Array.isArray(filteredDetectedForRun) ? filteredDetectedForRun.length : 0) || 0),
         )
-        const detectedSeedHexes = (Array.isArray(detectedForRun) ? detectedForRun : [])
+        const detectedSeedHexes = (Array.isArray(filteredDetectedForRun) ? filteredDetectedForRun : [])
           .map((entry) => normalizeHex(entry?.hex))
           .filter(Boolean)
         const lockedSeedHexes = (Array.isArray(stencilSettings.traceExtraColors) ? stencilSettings.traceExtraColors : [])
