@@ -1505,6 +1505,8 @@ function createTraceStyleStencilLayers(
     previewUrl: '',
     colorStats: { r: 0, g: 0, b: 0, count: 0 },
   }))
+  const winningLayerByPixel = new Int16Array(width * height)
+  winningLayerByPixel.fill(-1)
   for (let i = 0; i < source.data.length; i += 4) {
     const r = source.data[i]
     const g = source.data[i + 1]
@@ -1523,6 +1525,7 @@ function createTraceStyleStencilLayers(
       }
     }
     const layer = layers[winner]
+    winningLayerByPixel[pixelIndex] = winner
     layer.imageData.data[i] = 0
     layer.imageData.data[i + 1] = 0
     layer.imageData.data[i + 2] = 0
@@ -1535,24 +1538,50 @@ function createTraceStyleStencilLayers(
 
   const minPixels = Math.max(6, Math.floor((width * height) / 70000))
   const cleanupStrength = Math.max(0, Math.min(30, Number(noiseFilter) || 0))
+  layers.forEach((layer) => {
+    const morphPasses = cleanupStrength >= 16 ? 1 : 0
+    if (morphPasses > 0) {
+      smoothBinaryMask(layer.imageData, morphPasses)
+      dilateBinaryMask(layer.imageData, 1)
+      erodeBinaryMask(layer.imageData, 1)
+    }
+    removeSmallBinaryComponents(
+      layer.imageData,
+      Math.max(2, Math.floor((width * height) / (240000 - cleanupStrength * 2500))),
+      128,
+      0.00008,
+    )
+    fillSmallBinaryHoles(
+      layer.imageData,
+      Math.max(12, Math.floor((width * height) / (90000 - cleanupStrength * 1200))),
+    )
+  })
+
+  // Guarantee full foreground coverage: if cleanup removed all labels at a pixel, restore original winner.
+  for (let pixelIndex = 0; pixelIndex < winningLayerByPixel.length; pixelIndex += 1) {
+    const winner = winningLayerByPixel[pixelIndex]
+    if (winner < 0 || winner >= layers.length) continue
+    const idx = pixelIndex * 4
+    const isBg = Boolean(backgroundMask && backgroundMask[pixelIndex])
+    if (isBg) continue
+    let claimed = false
+    for (let layerIndex = 0; layerIndex < layers.length; layerIndex += 1) {
+      if (layers[layerIndex].imageData.data[idx] < 128) {
+        claimed = true
+        break
+      }
+    }
+    if (!claimed) {
+      const layer = layers[winner]
+      layer.imageData.data[idx] = 0
+      layer.imageData.data[idx + 1] = 0
+      layer.imageData.data[idx + 2] = 0
+      layer.imageData.data[idx + 3] = 255
+    }
+  }
+
   const output = layers
     .map((layer) => {
-      const morphPasses = cleanupStrength >= 16 ? 1 : 0
-      if (morphPasses > 0) {
-        smoothBinaryMask(layer.imageData, morphPasses)
-        dilateBinaryMask(layer.imageData, 1)
-        erodeBinaryMask(layer.imageData, 1)
-      }
-      removeSmallBinaryComponents(
-        layer.imageData,
-        Math.max(2, Math.floor((width * height) / (240000 - cleanupStrength * 2500))),
-        128,
-        0.00008,
-      )
-      fillSmallBinaryHoles(
-        layer.imageData,
-        Math.max(12, Math.floor((width * height) / (90000 - cleanupStrength * 1200))),
-      )
       const colorHex = safeAverageColor(layer.colorStats, '#7E86C2')
       return {
         index: layer.index,
@@ -2413,8 +2442,10 @@ function tintStencilSvg(svgString, color = '#555555', opacity = 1) {
   paths.forEach((path) => {
     path.setAttribute('fill', color)
     path.setAttribute('opacity', String(opacity))
-    const hasStroke = path.hasAttribute('stroke')
-    if (hasStroke) path.setAttribute('stroke', color)
+    path.setAttribute('stroke', color)
+    path.setAttribute('stroke-width', '1')
+    path.setAttribute('stroke-linejoin', 'round')
+    path.setAttribute('stroke-linecap', 'round')
   })
   return new XMLSerializer().serializeToString(svg)
 }
@@ -2519,9 +2550,10 @@ function buildCompositeLayerPreview(layers = [], { useLayerColor = true } = {}) 
       const paths = imported.matches?.('path') ? [imported] : [...imported.querySelectorAll?.('path')]
       paths.forEach((path) => {
         path.setAttribute('fill', paint)
-        if (path.hasAttribute('stroke')) {
-          path.setAttribute('stroke', paint)
-        }
+        path.setAttribute('stroke', paint)
+        path.setAttribute('stroke-width', '1')
+        path.setAttribute('stroke-linejoin', 'round')
+        path.setAttribute('stroke-linecap', 'round')
       })
       composite.appendChild(imported)
     })
