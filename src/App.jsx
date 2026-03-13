@@ -5811,15 +5811,25 @@ function StencilStudioPanel({
                 onPointerUp={handleEditPointerEnd}
                 onPointerCancel={handleEditPointerEnd}
                 onPointerLeave={handleEditPointerEnd}
+                onDragStart={(event) => event.preventDefault()}
                 className="block h-[420px] w-full overflow-hidden rounded-lg border border-[#e8d9cf] bg-white p-2"
                 title={editTool === 'erase' ? 'Drag to erase a local area from this layer' : 'Click a shape to delete it from this layer'}
               >
-                <img
-                  ref={editVectorImageRef}
-                  src={editingLayer.previewUrl}
-                  alt={`Edit shapes for ${editingLayer.name || `Layer ${editingLayer.index + 1}`}`}
-                  className={`h-full w-full object-contain ${editTool === 'erase' ? 'cursor-crosshair' : 'cursor-pointer'}`}
-                />
+                <div className="flex h-full w-full items-center justify-center overflow-hidden">
+                  <img
+                    ref={editVectorImageRef}
+                    src={editingLayer.previewUrl}
+                    alt={`Edit shapes for ${editingLayer.name || `Layer ${editingLayer.index + 1}`}`}
+                    draggable={false}
+                    onDragStart={(event) => event.preventDefault()}
+                    className={`h-full w-full object-contain select-none ${editTool === 'erase' ? 'cursor-crosshair' : 'cursor-pointer'}`}
+                    style={{
+                      transform: `translate(${Math.round(vectorPan.x)}px, ${Math.round(vectorPan.y)}px) scale(${vectorZoom})`,
+                      transformOrigin: 'center center',
+                      willChange: 'transform',
+                    }}
+                  />
+                </div>
               </button>
             </div>
           ) : activeVectorSvg ? (
