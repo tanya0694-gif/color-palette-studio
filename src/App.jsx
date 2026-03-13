@@ -427,6 +427,7 @@ function estimateDominantGridAngle(img) {
   const bins = 181
   const hist = new Float64Array(bins)
   let strongest = 0
+  let totalEnergy = 0
 
   for (let y = 1; y < height - 1; y += 1) {
     for (let x = 1; x < width - 1; x += 1) {
@@ -449,6 +450,7 @@ function estimateDominantGridAngle(img) {
       const magnitude = Math.hypot(gx, gy)
       if (magnitude < 26) continue
       if (magnitude > strongest) strongest = magnitude
+      totalEnergy += magnitude
 
       const edgeAngleDeg = (Math.atan2(gy, gx) * 180) / Math.PI
       const lineAngleDeg = normalizeAngleForGrid(edgeAngleDeg + 90)
@@ -460,16 +462,24 @@ function estimateDominantGridAngle(img) {
   if (strongest < 34) return 0
   let bestBin = -1
   let bestValue = 0
+  let secondBestValue = 0
   for (let i = 0; i < hist.length; i += 1) {
     if (hist[i] > bestValue) {
+      secondBestValue = bestValue
       bestValue = hist[i]
       bestBin = i
+    } else if (hist[i] > secondBestValue) {
+      secondBestValue = hist[i]
     }
   }
   if (bestBin < 0) return 0
+  const peakShare = totalEnergy > 0 ? bestValue / totalEnergy : 0
+  const peakAdvantage = secondBestValue > 0 ? bestValue / secondBestValue : Number.POSITIVE_INFINITY
+  // Only trust auto-rotation when one angle clearly dominates the edge field.
+  if (peakShare < 0.12 || peakAdvantage < 1.18) return 0
   const angle = bestBin - 90
   const corrected = normalizeAngleForGrid(angle)
-  if (Math.abs(corrected) < 0.8) return 0
+  if (Math.abs(corrected) < 1.5) return 0
   return Math.max(-20, Math.min(20, corrected))
 }
 
@@ -6014,7 +6024,7 @@ function App() {
     splitTolerance: 62,
     outlineSource: 'fromFill',
     outlineWidth: 2,
-    autoStraighten: true,
+    autoStraighten: false,
     straightenAdjust: 0,
     invert: false,
     traceExtraColors: [],
