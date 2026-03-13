@@ -4194,6 +4194,7 @@ function StencilStudioPanel({
   const [editingLayerKey, setEditingLayerKey] = useState(null)
   const vectorPanStateRef = useRef(null)
   const previewImageRef = useRef(null)
+  const editVectorImageRef = useRef(null)
   const splitSamplerCanvasRef = useRef(null)
   const [isVectorPanning, setIsVectorPanning] = useState(false)
   const compositePreviewSvg = useMemo(
@@ -4215,6 +4216,10 @@ function StencilStudioPanel({
   const focusedLayer = useMemo(
     () => stencilLayers.find((layer) => String(layer?.index) === String(focusedLayerKey)) || null,
     [stencilLayers, focusedLayerKey],
+  )
+  const editingLayer = useMemo(
+    () => stencilLayers.find((layer) => String(layer?.index) === String(editingLayerKey)) || null,
+    [stencilLayers, editingLayerKey],
   )
   const toneBuckets = useMemo(() => splitLayersIntoToneBuckets(stencilLayers, toneOverrides), [stencilLayers, toneOverrides])
   const focusedToneSvg = useMemo(() => {
@@ -4304,14 +4309,42 @@ function StencilStudioPanel({
     setSelectedLayerKeys([])
   }
 
-  function handleLayerShapeDelete(layer, event) {
-    if (!onDeleteShapeFromLayer || String(editingLayerKey) !== String(layer?.index)) return
-    const bounds = event.currentTarget.getBoundingClientRect()
-    if (!bounds.width || !bounds.height) return
+  function handleVectorShapeDelete(event) {
+    if (!onDeleteShapeFromLayer || !editingLayer || !editVectorImageRef.current) return
+    const image = editVectorImageRef.current
+    const bounds = image.getBoundingClientRect()
+    if (!bounds.width || !bounds.height || !image.naturalWidth || !image.naturalHeight) return
     const point = getPointerPoint(event)
-    const xNorm = Math.max(0, Math.min(1, (point.clientX - bounds.left) / bounds.width))
-    const yNorm = Math.max(0, Math.min(1, (point.clientY - bounds.top) / bounds.height))
-    onDeleteShapeFromLayer(layer, xNorm, yNorm)
+    const localX = point.clientX - bounds.left
+    const localY = point.clientY - bounds.top
+
+    const imageAspect = image.naturalWidth / image.naturalHeight
+    const boxAspect = bounds.width / bounds.height
+    let drawWidth = bounds.width
+    let drawHeight = bounds.height
+    let offsetX = 0
+    let offsetY = 0
+
+    if (imageAspect > boxAspect) {
+      drawHeight = drawWidth / imageAspect
+      offsetY = (bounds.height - drawHeight) / 2
+    } else {
+      drawWidth = drawHeight * imageAspect
+      offsetX = (bounds.width - drawWidth) / 2
+    }
+
+    if (
+      localX < offsetX ||
+      localY < offsetY ||
+      localX > offsetX + drawWidth ||
+      localY > offsetY + drawHeight
+    ) {
+      return
+    }
+
+    const xNorm = (localX - offsetX) / drawWidth
+    const yNorm = (localY - offsetY) / drawHeight
+    onDeleteShapeFromLayer(editingLayer, xNorm, yNorm)
   }
 
   const getPointerPoint = (event) => {
@@ -5628,7 +5661,27 @@ function StencilStudioPanel({
                 : 'Black areas are stencil cut geometry'}
             </p>
           </div>
-          {activeVectorSvg ? (
+          {editingLayer?.previewUrl ? (
+            <div className="space-y-2">
+              <div className="rounded-md border border-[#d7c7ee] bg-[#fff8f8] px-3 py-2 text-xs text-[#8a5555]">
+                Editing shapes in <span className="font-semibold">{editingLayer.name || `Layer ${editingLayer.index + 1}`}</span>.
+                Click a blob in the preview below to remove only that connected shape from this layer.
+              </div>
+              <button
+                type="button"
+                onClick={handleVectorShapeDelete}
+                className="block h-[420px] w-full overflow-hidden rounded-lg border border-[#e8d9cf] bg-white p-2"
+                title="Click a shape to delete it from this layer"
+              >
+                <img
+                  ref={editVectorImageRef}
+                  src={editingLayer.previewUrl}
+                  alt={`Edit shapes for ${editingLayer.name || `Layer ${editingLayer.index + 1}`}`}
+                  className="h-full w-full object-contain"
+                />
+              </button>
+            </div>
+          ) : activeVectorSvg ? (
             <div
               className="h-[420px] overflow-hidden rounded-lg border border-[#eee5db] bg-white p-2"
               onPointerDown={handleVectorPanStart}
@@ -5750,20 +5803,7 @@ function StencilStudioPanel({
                   </label>
                   <p className="text-sm font-medium text-[#5c4a3d]">{layer.name || `Layer ${layer.index + 1}`}</p>
                   <p className="mb-2 text-xs text-[#8b7b6b]">{layer.hint || `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`}</p>
-                  {String(editingLayerKey) === String(layer.index) && layer.previewUrl ? (
-                    <button
-                      type="button"
-                      onClick={(event) => handleLayerShapeDelete(layer, event)}
-                      className="mb-2 block h-36 w-full overflow-hidden rounded-md border border-[#cfaeae] bg-white p-1"
-                      title="Click a shape to delete it from this layer"
-                    >
-                      <img
-                        alt={`Edit shapes for layer ${layer.index + 1}`}
-                        src={layer.previewUrl}
-                        className="h-full w-full object-contain"
-                      />
-                    </button>
-                  ) : layer.svg ? (
+                  {layer.svg ? (
                     <div
                       className="mb-2 h-36 w-full overflow-hidden rounded-md border border-[#eee5db] bg-white p-1 [&_svg]:h-full [&_svg]:w-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:!overflow-visible"
                       dangerouslySetInnerHTML={{
@@ -5844,9 +5884,11 @@ function StencilStudioPanel({
                   </button>
                   <button
                     type="button"
-                    onClick={() =>
-                      setEditingLayerKey((prev) => (String(prev) === String(layer.index) ? null : String(layer.index)))
-                    }
+                    onClick={() => {
+                      const nextKey = String(editingLayerKey) === String(layer.index) ? null : String(layer.index)
+                      setEditingLayerKey(nextKey)
+                      setFocusedLayerKey(nextKey)
+                    }}
                     className="mt-2 w-full rounded-md border border-[#d7c7ee] bg-[#fffdfd] px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd]"
                   >
                     {String(editingLayerKey) === String(layer.index) ? 'Done Editing Shapes' : 'Edit Shapes'}
