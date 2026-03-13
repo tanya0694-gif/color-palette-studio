@@ -4169,6 +4169,9 @@ function StencilStudioPanel({
   onMergeLayers,
   onDeleteLayer,
   onDeleteShapeFromLayer,
+  onUndoLayerEdit,
+  canUndoLayerEdit,
+  onResetLayerEdits,
   onRemoveLayerAndFill,
   onAutoGroupByTone,
   onSaveToLibrary,
@@ -4221,6 +4224,7 @@ function StencilStudioPanel({
     () => stencilLayers.find((layer) => String(layer?.index) === String(editingLayerKey)) || null,
     [stencilLayers, editingLayerKey],
   )
+  const editingLayerHasUndo = Boolean(editingLayer && canUndoLayerEdit?.(editingLayer))
   const toneBuckets = useMemo(() => splitLayersIntoToneBuckets(stencilLayers, toneOverrides), [stencilLayers, toneOverrides])
   const focusedToneSvg = useMemo(() => {
     if (focusedToneGroup === 'foliageLight')
@@ -5663,9 +5667,35 @@ function StencilStudioPanel({
           </div>
           {editingLayer?.previewUrl ? (
             <div className="space-y-2">
-              <div className="rounded-md border border-[#d7c7ee] bg-[#fff8f8] px-3 py-2 text-xs text-[#8a5555]">
-                Editing shapes in <span className="font-semibold">{editingLayer.name || `Layer ${editingLayer.index + 1}`}</span>.
-                Click a blob in the preview below to remove only that connected shape from this layer.
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[#d7c7ee] bg-[#fff8f8] px-3 py-2 text-xs text-[#8a5555]">
+                <p>
+                  Editing shapes in <span className="font-semibold">{editingLayer.name || `Layer ${editingLayer.index + 1}`}</span>.
+                  Click a blob in the preview below to remove only that connected shape from this layer. If two shapes were connected, use undo immediately.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onUndoLayerEdit?.(editingLayer)}
+                    disabled={!editingLayerHasUndo}
+                    className="rounded-md border border-[#ead0d0] bg-white px-2 py-1 text-[11px] font-semibold text-[#8a5555] hover:bg-[#fff0f0] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Undo Last Remove
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onResetLayerEdits?.(editingLayer)}
+                    className="rounded-md border border-[#ead0d0] bg-white px-2 py-1 text-[11px] font-semibold text-[#8a5555] hover:bg-[#fff0f0]"
+                  >
+                    Reset Layer
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingLayerKey(null)}
+                    className="rounded-md border border-[#ead0d0] bg-white px-2 py-1 text-[11px] font-semibold text-[#8a5555] hover:bg-[#fff0f0]"
+                  >
+                    Done Editing
+                  </button>
+                </div>
               </div>
               <button
                 type="button"
@@ -6159,6 +6189,8 @@ function App() {
   const [stencilProcessedPreviewUrl, setStencilProcessedPreviewUrl] = useState('')
   const [stencilSvg, setStencilSvg] = useState('')
   const [stencilLayers, setStencilLayers] = useState([])
+  const [stencilLayerEditHistory, setStencilLayerEditHistory] = useState({})
+  const [stencilLayerOriginals, setStencilLayerOriginals] = useState({})
   const [stencilLibrary, setStencilLibrary] = useState(loadStencilLibrary)
   const [stencilBusy, setStencilBusy] = useState(false)
   const [stencilError, setStencilError] = useState('')
@@ -6641,6 +6673,8 @@ function App() {
   async function handleStencilImageFileChange(file) {
     setStencilError('')
     setStencilImageFile(file || null)
+    setStencilLayerEditHistory({})
+    setStencilLayerOriginals({})
     setStencilSettings((prev) => ({ ...prev, traceExcludedColors: [] }))
     setStencilSourceDataUrl('')
     setStencilStraightenAngle(0)
@@ -6807,6 +6841,19 @@ function App() {
         setStencilProcessedPreviewUrl(layerSvgs[0]?.previewUrl || '')
         setStencilSvg(layerSvgs[0]?.svg || '')
         setStencilLayers(layerSvgs)
+        setStencilLayerEditHistory({})
+        setStencilLayerOriginals(
+          Object.fromEntries(
+            layerSvgs.map((layer) => [
+              String(layer.index),
+              {
+                imageData: new ImageData(new Uint8ClampedArray(layer.imageData.data), layer.imageData.width, layer.imageData.height),
+                previewUrl: layer.previewUrl,
+                svg: layer.svg,
+              },
+            ]),
+          ),
+        )
       } else if (generatorType === 'auto') {
         const posterizedLayers = createPosterizedStencilLayers(image, {
           ...stencilSettings,
@@ -6838,6 +6885,19 @@ function App() {
         setStencilProcessedPreviewUrl(layerSvgs[0]?.previewUrl || '')
         setStencilSvg(layerSvgs[0]?.svg || '')
         setStencilLayers(layerSvgs)
+        setStencilLayerEditHistory({})
+        setStencilLayerOriginals(
+          Object.fromEntries(
+            layerSvgs.map((layer) => [
+              String(layer.index),
+              {
+                imageData: new ImageData(new Uint8ClampedArray(layer.imageData.data), layer.imageData.width, layer.imageData.height),
+                previewUrl: layer.previewUrl,
+                svg: layer.svg,
+              },
+            ]),
+          ),
+        )
       } else if (stencilSettings.mode === 'pattern') {
         const pairLayers =
           stencilSettings.outlineSource === 'colorSplit'
@@ -6888,6 +6948,19 @@ function App() {
         setStencilProcessedPreviewUrl(layerSvgs[0]?.previewUrl || '')
         setStencilSvg(layerSvgs[0]?.svg || '')
         setStencilLayers(layerSvgs)
+        setStencilLayerEditHistory({})
+        setStencilLayerOriginals(
+          Object.fromEntries(
+            layerSvgs.map((layer) => [
+              String(layer.index),
+              {
+                imageData: new ImageData(new Uint8ClampedArray(layer.imageData.data), layer.imageData.width, layer.imageData.height),
+                previewUrl: layer.previewUrl,
+                svg: layer.svg,
+              },
+            ]),
+          ),
+        )
       } else if (stencilSettings.mode === 'multi') {
         const posterizedLayers = createPosterizedStencilLayers(image, {
           ...stencilSettings,
@@ -6919,6 +6992,19 @@ function App() {
         setStencilProcessedPreviewUrl(layerSvgs[0]?.previewUrl || '')
         setStencilSvg(layerSvgs[0]?.svg || '')
         setStencilLayers(layerSvgs)
+        setStencilLayerEditHistory({})
+        setStencilLayerOriginals(
+          Object.fromEntries(
+            layerSvgs.map((layer) => [
+              String(layer.index),
+              {
+                imageData: new ImageData(new Uint8ClampedArray(layer.imageData.data), layer.imageData.width, layer.imageData.height),
+                previewUrl: layer.previewUrl,
+                svg: layer.svg,
+              },
+            ]),
+          ),
+        )
       } else {
         const processed = createStencilImageData(image, {
           ...stencilSettings,
@@ -7150,6 +7236,17 @@ function App() {
         if (String(layer?.index) !== layerKey || !layer?.imageData) return layer
         const px = Math.max(0, Math.min(layer.imageData.width - 1, Math.round(xNorm * (layer.imageData.width - 1))))
         const py = Math.max(0, Math.min(layer.imageData.height - 1, Math.round(yNorm * (layer.imageData.height - 1))))
+        setStencilLayerEditHistory((history) => ({
+          ...history,
+          [layerKey]: [
+            ...(Array.isArray(history[layerKey]) ? history[layerKey] : []),
+            {
+              imageData: new ImageData(new Uint8ClampedArray(layer.imageData.data), layer.imageData.width, layer.imageData.height),
+              previewUrl: layer.previewUrl,
+              svg: layer.svg,
+            },
+          ],
+        }))
         const nextImageData = removeConnectedComponentAtPoint(layer.imageData, px, py)
         if (!nextImageData) return layer
         const rawSvg = buildStencilSvg(nextImageData, {
@@ -7170,6 +7267,77 @@ function App() {
         }
       })
       if (!changed) return prev
+      const currentFocused = next.find((layer) => String(layer?.index) === layerKey)
+      if (currentFocused?.svg) {
+        setStencilSvg(currentFocused.svg)
+        setStencilProcessedPreviewUrl(currentFocused.previewUrl || '')
+      }
+      return next
+    })
+  }
+
+  function undoStencilLayerEdit(layerInput) {
+    const layerKey = String(layerInput?.index ?? '')
+    if (!layerKey) return
+    const history = stencilLayerEditHistory[layerKey]
+    const previous = Array.isArray(history) ? history[history.length - 1] : null
+    if (!previous?.imageData) return
+    setStencilLayerEditHistory((current) => ({
+      ...current,
+      [layerKey]: (Array.isArray(current[layerKey]) ? current[layerKey].slice(0, -1) : []),
+    }))
+    setStencilLayers((prev) => {
+      const next = prev.map((layer) =>
+        String(layer?.index) === layerKey
+          ? {
+              ...layer,
+              imageData: new ImageData(
+                new Uint8ClampedArray(previous.imageData.data),
+                previous.imageData.width,
+                previous.imageData.height,
+              ),
+              previewUrl: previous.previewUrl,
+              svg: previous.svg,
+            }
+          : layer,
+      )
+      const currentFocused = next.find((layer) => String(layer?.index) === layerKey)
+      if (currentFocused?.svg) {
+        setStencilSvg(currentFocused.svg)
+        setStencilProcessedPreviewUrl(currentFocused.previewUrl || '')
+      }
+      return next
+    })
+  }
+
+  function canUndoStencilLayerEdit(layerInput) {
+    const layerKey = String(layerInput?.index ?? '')
+    if (!layerKey) return false
+    const history = stencilLayerEditHistory[layerKey]
+    return Array.isArray(history) && history.length > 0
+  }
+
+  function resetStencilLayerEdits(layerInput) {
+    const layerKey = String(layerInput?.index ?? '')
+    if (!layerKey) return
+    const original = stencilLayerOriginals[layerKey]
+    if (!original?.imageData) return
+    setStencilLayerEditHistory((current) => ({ ...current, [layerKey]: [] }))
+    setStencilLayers((prev) => {
+      const next = prev.map((layer) =>
+        String(layer?.index) === layerKey
+          ? {
+              ...layer,
+              imageData: new ImageData(
+                new Uint8ClampedArray(original.imageData.data),
+                original.imageData.width,
+                original.imageData.height,
+              ),
+              previewUrl: original.previewUrl,
+              svg: original.svg,
+            }
+          : layer,
+      )
       const currentFocused = next.find((layer) => String(layer?.index) === layerKey)
       if (currentFocused?.svg) {
         setStencilSvg(currentFocused.svg)
@@ -8358,6 +8526,9 @@ function App() {
           onMergeLayers={combineStencilLayers}
           onDeleteLayer={deleteStencilLayer}
           onDeleteShapeFromLayer={deleteShapeFromStencilLayer}
+          onUndoLayerEdit={undoStencilLayerEdit}
+          canUndoLayerEdit={canUndoStencilLayerEdit}
+          onResetLayerEdits={resetStencilLayerEdits}
           onRemoveLayerAndFill={removeStencilLayerAndFill}
           onAutoGroupByTone={autoGroupStencilLayersByTone}
           onSaveToLibrary={saveStencilToLibrary}
