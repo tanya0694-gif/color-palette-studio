@@ -2442,10 +2442,14 @@ function tintStencilSvg(svgString, color = '#555555', opacity = 1) {
   paths.forEach((path) => {
     path.setAttribute('fill', color)
     path.setAttribute('opacity', String(opacity))
-    path.setAttribute('stroke', color)
-    path.setAttribute('stroke-width', '1')
-    path.setAttribute('stroke-linejoin', 'round')
-    path.setAttribute('stroke-linecap', 'round')
+    if (path.hasAttribute('stroke')) {
+      path.setAttribute('stroke', color)
+    } else {
+      path.removeAttribute('stroke')
+      path.removeAttribute('stroke-width')
+      path.removeAttribute('stroke-linejoin')
+      path.removeAttribute('stroke-linecap')
+    }
   })
   return new XMLSerializer().serializeToString(svg)
 }
@@ -2517,7 +2521,7 @@ function fitSvgForDisplay(svgString, paddingRatio = 0.06) {
   }
 }
 
-function buildCompositeLayerPreview(layers = [], { useLayerColor = true } = {}) {
+function buildCompositeLayerPreview(layers = [], { useLayerColor = true, sealSeams = true } = {}) {
   const ordered = layers
     .filter((layer) => layer?.svg)
     .slice()
@@ -2550,10 +2554,17 @@ function buildCompositeLayerPreview(layers = [], { useLayerColor = true } = {}) 
       const paths = imported.matches?.('path') ? [imported] : [...imported.querySelectorAll?.('path')]
       paths.forEach((path) => {
         path.setAttribute('fill', paint)
-        path.setAttribute('stroke', paint)
-        path.setAttribute('stroke-width', '1')
-        path.setAttribute('stroke-linejoin', 'round')
-        path.setAttribute('stroke-linecap', 'round')
+        if (sealSeams) {
+          path.setAttribute('stroke', paint)
+          path.setAttribute('stroke-width', '0.35')
+          path.setAttribute('stroke-linejoin', 'round')
+          path.setAttribute('stroke-linecap', 'round')
+        } else {
+          path.removeAttribute('stroke')
+          path.removeAttribute('stroke-width')
+          path.removeAttribute('stroke-linejoin')
+          path.removeAttribute('stroke-linecap')
+        }
       })
       composite.appendChild(imported)
     })
@@ -4101,11 +4112,19 @@ function StencilStudioPanel({
   const splitSamplerCanvasRef = useRef(null)
   const [isVectorPanning, setIsVectorPanning] = useState(false)
   const compositePreviewSvg = useMemo(
-    () => buildCompositeLayerPreview(stencilLayers, { useLayerColor: true }),
+    () =>
+      buildCompositeLayerPreview(stencilLayers, {
+        useLayerColor: true,
+        sealSeams: !stencilLayers.every((layer) => /plate/i.test(String(layer?.name || ''))),
+      }),
     [stencilLayers],
   )
   const cutPreviewSvg = useMemo(
-    () => buildCompositeLayerPreview(stencilLayers, { useLayerColor: false }),
+    () =>
+      buildCompositeLayerPreview(stencilLayers, {
+        useLayerColor: false,
+        sealSeams: !stencilLayers.every((layer) => /plate/i.test(String(layer?.name || ''))),
+      }),
     [stencilLayers],
   )
   const focusedLayer = useMemo(
