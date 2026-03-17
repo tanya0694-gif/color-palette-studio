@@ -4776,22 +4776,18 @@ function StencilStudioPanel({
                 <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                   Workflow
                 </label>
-                <div className="inline-flex rounded-lg border-2 border-[#cab6ea] bg-[#efe6fb] p-1 shadow-sm">
-                  <button
-                    type="button"
-                    onClick={() => onUpdateSetting('generatorType', 'auto')}
-                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
-                      isAutoGenerator
-                        ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
-                        : 'text-[#5f5276] hover:bg-white'
-                    }`}
-                  >
-                    Tone Stencil
-                  </button>
-                </div>
                 <p className="mt-2 text-[11px] leading-relaxed text-[#8b7b6b]">
-                  Best for flat or semi-flat illustrations with clear shapes. We simplify the artwork first, then split it into stencil layers.
+                  Best for flat or semi-flat illustrations with clear shapes.
                 </p>
+                <div className="mt-2 rounded-md border border-[#d7c7ee] bg-white px-3 py-2 text-[11px] leading-relaxed text-[#6b5b4f]">
+                  1. Upload artwork
+                  <br />
+                  2. Pick a simplify style
+                  <br />
+                  3. Pick stencil layers
+                  <br />
+                  4. Click Generate
+                </div>
                 <div className="mt-2">
                   <button
                     type="button"
@@ -4859,43 +4855,47 @@ function StencilStudioPanel({
                   />
                   <p className="mt-1 px-1 text-[11px] text-[#8b7b6b]">Or drag and drop an image here</p>
                 </div>
-                <label className="mt-2 flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(stencilSettings.autoStraighten)}
-                    onChange={(e) => onUpdateSetting('autoStraighten', e.target.checked)}
-                    className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
-                  />
-                  Auto straighten image angle
-                  <HelpTip text="Detects the dominant pattern angle and rotates before vectorizing. Helpful for tilted phone photos." />
-                </label>
-                {Math.abs(stencilStraightenAngle) > 0.01 ? (
-                  <p className="mt-1 text-[11px] text-[#7f7468]">
-                    Applied straighten: {stencilStraightenAngle > 0 ? '+' : ''}
-                    {stencilStraightenAngle.toFixed(1)}°
-                  </p>
+                {showAdvancedGenerator ? (
+                  <>
+                    <label className="mt-2 flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(stencilSettings.autoStraighten)}
+                        onChange={(e) => onUpdateSetting('autoStraighten', e.target.checked)}
+                        className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
+                      />
+                      Auto straighten image angle
+                      <HelpTip text="Detects the dominant pattern angle and rotates before vectorizing. Helpful for tilted phone photos." />
+                    </label>
+                    {Math.abs(stencilStraightenAngle) > 0.01 ? (
+                      <p className="mt-1 text-[11px] text-[#7f7468]">
+                        Applied straighten: {stencilStraightenAngle > 0 ? '+' : ''}
+                        {stencilStraightenAngle.toFixed(1)}°
+                      </p>
+                    ) : null}
+                    <div className="mt-2 flex items-center gap-2">
+                      <label className="flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
+                        <input
+                          type="checkbox"
+                          checked={stencilRectifyEnabled}
+                          onChange={(e) => onToggleRectify(e.target.checked)}
+                          className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
+                        />
+                        Manual 4-corner rectify
+                        <HelpTip text="Drag the 4 corner points on the preview to align the pattern area before tracing." />
+                      </label>
+                      {stencilRectifyEnabled ? (
+                        <button
+                          type="button"
+                          onClick={onResetRectifyCorners}
+                          className="rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-2 py-1 text-[11px] font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
+                        >
+                          Reset
+                        </button>
+                      ) : null}
+                    </div>
+                  </>
                 ) : null}
-                <div className="mt-2 flex items-center gap-2">
-                  <label className="flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
-                    <input
-                      type="checkbox"
-                      checked={stencilRectifyEnabled}
-                      onChange={(e) => onToggleRectify(e.target.checked)}
-                      className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
-                    />
-                    Manual 4-corner rectify
-                    <HelpTip text="Drag the 4 corner points on the preview to align the pattern area before tracing." />
-                  </label>
-                  {stencilRectifyEnabled ? (
-                    <button
-                      type="button"
-                      onClick={onResetRectifyCorners}
-                      className="rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-2 py-1 text-[11px] font-medium text-[#5e4a7f] hover:bg-[#ece2fa]"
-                    >
-                      Reset
-                    </button>
-                  ) : null}
-                </div>
               </div>
 
               {(isAutoGenerator || isTraceGenerator) ? (
@@ -4903,26 +4903,19 @@ function StencilStudioPanel({
                   <div className="mb-2">
                     <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Simplify Artwork</p>
                     <p className="mt-1 text-[11px] leading-relaxed text-[#8b7b6b]">
-                      Clean the source before building stencil layers. Presets are the fastest place to start.
+                      Clean the source before building stencil layers.
                     </p>
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      ['keep', 'Keep Original'],
-                      ['clean', 'Clean Illustration'],
-                      ['strong', 'Strong Simplify'],
-                      ['glow', 'Remove Glow'],
-                    ].map(([key, label]) => (
-                      <button
-                        key={`simplify-${key}`}
-                        type="button"
-                        onClick={() => applySimplifyPreset(key)}
-                        className="rounded-md border border-[#d7c7ee] bg-white px-3 py-2 text-[11px] font-semibold text-[#5e4a7f] hover:bg-[#f6f0ff]"
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+                  <select
+                    defaultValue="clean"
+                    onChange={(e) => applySimplifyPreset(e.target.value)}
+                    className="w-full rounded-md border border-[#d9cfc4] bg-white px-3 py-2 text-sm text-[#5e4a7f]"
+                  >
+                    <option value="keep">Keep Original</option>
+                    <option value="clean">Clean Illustration</option>
+                    <option value="strong">Strong Simplify</option>
+                    <option value="glow">Remove Glow</option>
+                  </select>
                 </div>
               ) : null}
 
@@ -4976,7 +4969,8 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              <div>
+              {showAdvancedGenerator ? (
+                <div>
                 <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                   Export Size
                 </label>
@@ -5004,8 +4998,10 @@ function StencilStudioPanel({
                     4x6 Size
                   </button>
                 </div>
-              </div>
+                </div>
+              ) : null}
 
+              {showAdvancedGenerator ? (
               <div>
                 <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                   Orientation
@@ -5035,8 +5031,9 @@ function StencilStudioPanel({
                   </button>
                 </div>
               </div>
+              ) : null}
 
-              {isAutoGenerator || isTraceGenerator ? (
+              {showAdvancedGenerator && (isAutoGenerator || isTraceGenerator) ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Export Mode</span>
@@ -5080,7 +5077,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {(isAutoGenerator || isTraceGenerator) && stencilSettings.exportContent !== 'elements' ? (
+              {showAdvancedGenerator && (isAutoGenerator || isTraceGenerator) && stencilSettings.exportContent !== 'elements' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Plate Shape</span>
@@ -5124,7 +5121,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {(isAutoGenerator || isTraceGenerator) && stencilSettings.exportContent !== 'elements' ? (
+              {showAdvancedGenerator && (isAutoGenerator || isTraceGenerator) && stencilSettings.exportContent !== 'elements' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Plate Margin ({Math.round((Number(stencilSettings.plateMargin || 0.08) * 100))}%)</span>
@@ -5141,7 +5138,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {isLegacyGenerator &&
+              {showAdvancedGenerator && isLegacyGenerator &&
               stencilSettings.mode === 'pattern' &&
               stencilSettings.outlineSource !== 'colorSplit' ? (
                 <div>
@@ -5176,7 +5173,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {isLegacyGenerator &&
+              {showAdvancedGenerator && isLegacyGenerator &&
               stencilSettings.mode === 'pattern' &&
               stencilSettings.outlineSource !== 'colorSplit' ? (
                 <div>
@@ -5222,7 +5219,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {isLegacyGenerator && stencilSettings.mode === 'pattern' && stencilSettings.outlineSource === 'fromFill' ? (
+              {showAdvancedGenerator && isLegacyGenerator && stencilSettings.mode === 'pattern' && stencilSettings.outlineSource === 'fromFill' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Outline Width ({stencilSettings.outlineWidth})</span>
@@ -5239,7 +5236,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {isLegacyGenerator && stencilSettings.mode === 'pattern' && stencilSettings.outlineSource === 'colorSplit' ? (
+              {showAdvancedGenerator && isLegacyGenerator && stencilSettings.mode === 'pattern' && stencilSettings.outlineSource === 'colorSplit' ? (
                 <div className="space-y-3 rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-[#8b7b6b]">Color Split</p>
                   <label className="block text-xs font-medium text-[#6b5b4f]">
@@ -5296,7 +5293,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {isLegacyGenerator && stencilSettings.mode === 'pattern' ? (
+              {showAdvancedGenerator && isLegacyGenerator && stencilSettings.mode === 'pattern' ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Pattern Scale ({stencilSettings.tileScale}%)</span>
@@ -5319,34 +5316,23 @@ function StencilStudioPanel({
                   <div className="mb-2">
                     <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Stencil Layers</p>
                     <p className="mt-1 text-[11px] leading-relaxed text-[#8b7b6b]">
-                      Split the cleaned artwork by light, mid, and dark shapes instead of original color names.
+                      Split the cleaned artwork by light, mid, and dark shapes.
                     </p>
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      ['outline', 'Outline'],
-                      ['2tone', '2 Tone'],
-                      ['3tone', '3 Tone'],
-                      ['4tone', '4 Tone'],
-                    ].map(([mode, label]) => (
-                      <button
-                        key={`tone-mode-${mode}`}
-                        type="button"
-                        onClick={() => applyToneLayerPreset(mode)}
-                        className={`rounded-md border px-3 py-2 text-[11px] font-semibold ${
-                          toneLayerMode === mode
-                            ? 'border-[#9c82c0] bg-white text-[#4f3e6b]'
-                            : 'border-[#d7c7ee] bg-[#fcf9ff] text-[#6b5b4f] hover:bg-white'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+                  <select
+                    value={toneLayerMode}
+                    onChange={(e) => applyToneLayerPreset(e.target.value)}
+                    className="w-full rounded-md border border-[#d9cfc4] bg-white px-3 py-2 text-sm text-[#5e4a7f]"
+                  >
+                    <option value="outline">Outline</option>
+                    <option value="2tone">2 Tone</option>
+                    <option value="3tone">3 Tone</option>
+                    <option value="4tone">4 Tone</option>
+                  </select>
                 </div>
               ) : null}
 
-              {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
+              {showAdvancedGenerator && (((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi'))) ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Layer Count ({stencilSettings.layerCount})</span>
@@ -5405,7 +5391,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {isTraceGenerator ? (
+              {showAdvancedGenerator && isTraceGenerator ? (
                 <div className="space-y-3 rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
                   <div className="flex items-center justify-between gap-2">
                     <div>
@@ -5554,7 +5540,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {isTraceGenerator ? (
+              {showAdvancedGenerator && isTraceGenerator ? (
                 <label className="flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
                   <input
                     type="checkbox"
@@ -5567,7 +5553,7 @@ function StencilStudioPanel({
                 </label>
               ) : null}
 
-              {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
+              {showAdvancedGenerator && (((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi'))) ? (
                 <label className="flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
                   <input
                     type="checkbox"
@@ -5580,7 +5566,7 @@ function StencilStudioPanel({
                 </label>
               ) : null}
 
-              {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) &&
+              {showAdvancedGenerator && (((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi'))) &&
               Boolean(stencilSettings.removeBackground) ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
@@ -5598,7 +5584,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
+              {showAdvancedGenerator && (((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi'))) ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Detail ({stencilSettings.detail})</span>
@@ -5615,7 +5601,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
+              {showAdvancedGenerator && (((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi'))) ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Noise Filter ({stencilSettings.noiseFilter})</span>
@@ -5632,7 +5618,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {isLegacyGenerator ? (
+              {showAdvancedGenerator && isLegacyGenerator ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
                     <span>Bridge Width ({stencilSettings.bridgeWidth})</span>
@@ -5650,7 +5636,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {isLegacyGenerator ? (
+              {showAdvancedGenerator && isLegacyGenerator ? (
                 <label className="flex items-center gap-2 text-sm text-[#5c4a3d]">
                   <input
                     type="checkbox"
