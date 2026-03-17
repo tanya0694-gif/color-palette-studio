@@ -4312,6 +4312,66 @@ function StencilStudioPanel({
       })
     : []
   const detectedTraceCount = filteredDetectedTraceColors.length
+  const toneLayerMode =
+    Number(stencilSettings.layerCount) <= 1
+      ? 'outline'
+      : Number(stencilSettings.layerCount) === 2
+      ? '2tone'
+      : Number(stencilSettings.layerCount) === 3
+      ? '3tone'
+      : '4tone'
+
+  function applySimplifyPreset(preset) {
+    const presets = {
+      keep: {
+        generatorType: 'auto',
+        removeBackground: false,
+        backgroundTolerance: 18,
+        detail: 7,
+        noiseFilter: 4,
+        matchSourceColors: false,
+      },
+      clean: {
+        generatorType: 'auto',
+        removeBackground: true,
+        backgroundTolerance: 24,
+        detail: 6,
+        noiseFilter: 8,
+        matchSourceColors: false,
+      },
+      strong: {
+        generatorType: 'auto',
+        removeBackground: true,
+        backgroundTolerance: 30,
+        detail: 5,
+        noiseFilter: 14,
+        matchSourceColors: false,
+      },
+      glow: {
+        generatorType: 'auto',
+        removeBackground: true,
+        backgroundTolerance: 38,
+        detail: 4,
+        noiseFilter: 18,
+        matchSourceColors: false,
+      },
+    }
+    const next = presets[preset]
+    if (!next) return
+    Object.entries(next).forEach(([field, value]) => onUpdateSetting(field, value))
+  }
+
+  function applyToneLayerPreset(mode) {
+    const layerCountByMode = {
+      outline: 1,
+      '2tone': 2,
+      '3tone': 3,
+      '4tone': 4,
+    }
+    onUpdateSetting('generatorType', 'auto')
+    onUpdateSetting('layerCount', layerCountByMode[mode] || 3)
+    onUpdateSetting('matchSourceColors', false)
+  }
 
   useEffect(() => {
     setSelectedLayerKeys([])
@@ -4675,9 +4735,9 @@ function StencilStudioPanel({
             <h2 className="font-display text-2xl font-semibold text-[#3f3254] md:text-3xl">Stencil Studio</h2>
             <p className="text-sm text-[#7f7468]">
               {isAutoGenerator
-                ? 'Upload an image and auto-generate separated stencil layers for Cricut.'
+                ? 'Upload flat or semi-flat artwork, simplify it, then generate stencil-ready tone layers for Cricut.'
                 : isTraceGenerator
-                ? 'Trace from image with SVG-style color clusters for cleaner direct stencil layers.'
+                ? 'Advanced trace mode for color-cluster extraction when you need more manual control.'
                 : 'Legacy image tracing controls (advanced/tuning mode).'}
             </p>
           </div>
@@ -4714,21 +4774,24 @@ function StencilStudioPanel({
             <div className="space-y-4">
               <div>
                 <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                  Generator
+                  Workflow
                 </label>
                 <div className="inline-flex rounded-lg border-2 border-[#cab6ea] bg-[#efe6fb] p-1 shadow-sm">
                   <button
                     type="button"
-                    onClick={() => onUpdateSetting('generatorType', 'trace')}
+                    onClick={() => onUpdateSetting('generatorType', 'auto')}
                     className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
-                      isTraceGenerator
+                      isAutoGenerator
                         ? 'bg-gradient-to-r from-[#b39ad6] to-[#a58bc4] text-[#3b2f4f] shadow-sm'
                         : 'text-[#5f5276] hover:bg-white'
                     }`}
                   >
-                    Trace from Image
+                    Tone Stencil
                   </button>
                 </div>
+                <p className="mt-2 text-[11px] leading-relaxed text-[#8b7b6b]">
+                  Best for flat or semi-flat illustrations with clear shapes. We simplify the artwork first, then split it into stencil layers.
+                </p>
                 <div className="mt-2">
                   <button
                     type="button"
@@ -4742,14 +4805,14 @@ function StencilStudioPanel({
                   <div className="mt-2 inline-flex rounded-lg border border-[#d7c7ee] bg-white p-1">
                     <button
                       type="button"
-                      onClick={() => onUpdateSetting('generatorType', 'auto')}
+                      onClick={() => onUpdateSetting('generatorType', 'trace')}
                       className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-all ${
-                        isAutoGenerator
+                        isTraceGenerator
                           ? 'bg-[#a58bc4] text-[#3f3254]'
                           : 'text-[#5f5276] hover:bg-[#f6f0ff]'
                       }`}
                     >
-                      Auto Layers
+                      Trace from Image
                     </button>
                     <button
                       type="button"
@@ -4834,6 +4897,34 @@ function StencilStudioPanel({
                   ) : null}
                 </div>
               </div>
+
+              {(isAutoGenerator || isTraceGenerator) ? (
+                <div className="rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
+                  <div className="mb-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Simplify Artwork</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-[#8b7b6b]">
+                      Clean the source before building stencil layers. Presets are the fastest place to start.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      ['keep', 'Keep Original'],
+                      ['clean', 'Clean Illustration'],
+                      ['strong', 'Strong Simplify'],
+                      ['glow', 'Remove Glow'],
+                    ].map(([key, label]) => (
+                      <button
+                        key={`simplify-${key}`}
+                        type="button"
+                        onClick={() => applySimplifyPreset(key)}
+                        className="rounded-md border border-[#d7c7ee] bg-white px-3 py-2 text-[11px] font-semibold text-[#5e4a7f] hover:bg-[#f6f0ff]"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
 
               {isLegacyGenerator ? (
                 <div>
@@ -5224,10 +5315,42 @@ function StencilStudioPanel({
 
 
               {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
+                <div className="rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
+                  <div className="mb-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Stencil Layers</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-[#8b7b6b]">
+                      Split the cleaned artwork by light, mid, and dark shapes instead of original color names.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      ['outline', 'Outline'],
+                      ['2tone', '2 Tone'],
+                      ['3tone', '3 Tone'],
+                      ['4tone', '4 Tone'],
+                    ].map(([mode, label]) => (
+                      <button
+                        key={`tone-mode-${mode}`}
+                        type="button"
+                        onClick={() => applyToneLayerPreset(mode)}
+                        className={`rounded-md border px-3 py-2 text-[11px] font-semibold ${
+                          toneLayerMode === mode
+                            ? 'border-[#9c82c0] bg-white text-[#4f3e6b]'
+                            : 'border-[#d7c7ee] bg-[#fcf9ff] text-[#6b5b4f] hover:bg-white'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                    <span>Layers ({stencilSettings.layerCount})</span>
-                    <HelpTip text="Number of light-to-dark stencil layers. More layers create smoother tonal transitions." />
+                    <span>Layer Count ({stencilSettings.layerCount})</span>
+                    <HelpTip text="Number of tonal stencil layers. Outline is 1, most artwork works best at 3 or 4." />
                   </div>
                   <div className="mb-2 flex items-center gap-2">
                     <button
@@ -5431,7 +5554,7 @@ function StencilStudioPanel({
                 </div>
               ) : null}
 
-              {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
+              {isTraceGenerator ? (
                 <label className="flex items-center gap-2 text-xs font-medium text-[#6b5b4f]">
                   <input
                     type="checkbox"
@@ -5439,8 +5562,8 @@ function StencilStudioPanel({
                     onChange={(e) => onUpdateSetting('matchSourceColors', e.target.checked)}
                     className="h-4 w-4 rounded border-[#d9cfc4] accent-[#9678b8]"
                   />
-                  {isTraceGenerator ? 'Preserve Source Colors' : 'Match Source Colors'}
-                  <HelpTip text="Builds layers by color families from the original image, so stacked preview stays closer to the source." />
+                  Preserve Source Colors
+                  <HelpTip text="Trace mode only. Keeps color families closer to the original image instead of pure tone groups." />
                 </label>
               ) : null}
 
@@ -6327,7 +6450,7 @@ function App() {
     noiseFilter: 8,
     bridgeWidth: 0,
     layerCount: 3,
-    matchSourceColors: true,
+    matchSourceColors: false,
     paperSize: '5x7',
     orientation: 'portrait',
     tileScale: 100,
