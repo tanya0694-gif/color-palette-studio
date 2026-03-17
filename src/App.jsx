@@ -383,6 +383,16 @@ async function loadImageFromFile(file) {
   }
 }
 
+async function loadImageFromUrl(url) {
+  if (!url) throw new Error('Missing image URL.')
+  return await new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('Could not read image.'))
+    image.src = url
+  })
+}
+
 async function readFileAsDataUrl(file) {
   if (!file) return ''
   return await new Promise((resolve, reject) => {
@@ -507,6 +517,54 @@ function renderImageToCanvas(img, { maxDim = 1200, rotationDeg = 0 } = {}) {
   ctx.setTransform(1, 0, 0, 1, 0, 0)
 
   return { canvas, width: outWidth, height: outHeight }
+}
+
+function buildMaskFromNormalizedStrokes(width, height, strokes = []) {
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, width)
+  canvas.height = Math.max(1, height)
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return null
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  strokes.forEach((stroke) => {
+    const x = Math.max(0, Math.min(canvas.width, Number(stroke?.x || 0) * canvas.width))
+    const y = Math.max(0, Math.min(canvas.height, Number(stroke?.y || 0) * canvas.height))
+    const radius = Math.max(2, Math.round((Number(stroke?.size || 0.04) * Math.max(canvas.width, canvas.height)) / 2))
+    ctx.globalCompositeOperation = stroke?.mode === 'erase' ? 'destination-out' : 'source-over'
+    ctx.fillStyle = '#ffffff'
+    ctx.beginPath()
+    ctx.arc(x, y, radius, 0, Math.PI * 2)
+    ctx.fill()
+  })
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+  const mask = new Uint8Array(canvas.width * canvas.height)
+  for (let i = 0; i < mask.length; i += 1) {
+    mask[i] = data[i * 4 + 3] > 20 ? 1 : 0
+  }
+  return mask
+}
+
+function applySubjectMaskToCanvas(sourceCanvas, mask, { keepInside = true } = {}) {
+  const canvas = document.createElement('canvas')
+  canvas.width = sourceCanvas.width
+  canvas.height = sourceCanvas.height
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  const srcCtx = sourceCanvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx || !srcCtx) return sourceCanvas
+  const source = srcCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height)
+  const out = new ImageData(new Uint8ClampedArray(source.data), source.width, source.height)
+  for (let i = 0; i < mask.length; i += 1) {
+    const inside = Boolean(mask[i])
+    const keep = keepInside ? inside : !inside
+    if (keep) continue
+    const idx = i * 4
+    out.data[idx] = 255
+    out.data[idx + 1] = 255
+    out.data[idx + 2] = 255
+    out.data[idx + 3] = 255
+  }
+  ctx.putImageData(out, 0, 0)
+  return canvas
 }
 
 function rectifyCanvasFromCorners(canvas, corners = DEFAULT_RECTIFY_CORNERS) {
@@ -2455,6 +2513,19 @@ function buildStyledPathNode(outputDoc, sourcePath) {
   return node
 }
 
+function flowerLayerCountLabel(mappedIndex, index, count) {
+  if (count <= 1) return 'Flower Outline'
+  if (count === 2) return index === 0 ? 'Flower Light' : 'Flower Dark'
+  if (count === 3) return ['Flower Light', 'Flower Mid', 'Flower Dark'][index] || `Flower Layer ${mappedIndex + 1}`
+  return ['Flower Highlight', 'Flower Light', 'Flower Mid', 'Flower Dark'][index] || `Flower Layer ${mappedIndex + 1}`
+}
+
+function foliageLayerCountLabel(index, count) {
+  if (count <= 1) return 'Foliage'
+  if (count === 2) return index === 0 ? 'Foliage Light' : 'Foliage Dark'
+  return ['Foliage Light', 'Foliage Mid', 'Foliage Dark'][index] || `Foliage Layer ${index + 1}`
+}
+
 function wrapSvgForStencilCanvas(
   svgString,
   {
@@ -4179,6 +4250,7 @@ function SuppliesPanel({
 function StencilStudioPanel({
   stencilImageFile,
   stencilImagePreviewUrl,
+  flowerMaskStrokes,
   stencilProcessedPreviewUrl,
   stencilSvg,
   stencilLayers,
@@ -4193,6 +4265,8 @@ function StencilStudioPanel({
   onImageChange,
   onUpdateSetting,
   onGenerate,
+  onAddFlowerMaskStroke,
+  onResetFlowerMask,
   onDownloadSvg,
   onDownloadLayerSvg,
   onDownloadAllLayers,
@@ -4229,8 +4303,12 @@ function StencilStudioPanel({
   const [editTool, setEditTool] = useState('blob')
   const [eraseBrushSize, setEraseBrushSize] = useState(18)
   const [isEraseDrawing, setIsEraseDrawing] = useState(false)
+  const [maskTool, setMaskTool] = useState('paint')
+  const [maskBrushSize, setMaskBrushSize] = useState(14)
+  const [isMaskPainting, setIsMaskPainting] = useState(false)
   const vectorPanStateRef = useRef(null)
   const previewImageRef = useRef(null)
+  const previewMaskCanvasRef = useRef(null)
   const editVectorImageRef = useRef(null)
   const eraseStrokeActiveRef = useRef(false)
   const splitSamplerCanvasRef = useRef(null)
@@ -4593,6 +4671,54 @@ function StencilStudioPanel({
     }
   }, [filteredDetectedTraceColors, extraTraceColors, traceColorInput])
 
+  useEffect(() => {
+    const image = previewImageRef.current
+    const canvas = previewMaskCanvasRef.current
+    if (!image || !canvas) return
+    const redraw = () => {
+      const bounds = image.getBoundingClientRect()
+      const width = Math.max(1, Math.round(bounds.width))
+      const height = Math.max(1, Math.round(bounds.height))
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      ctx.clearRect(0, 0, width, height)
+      if (stencilSettings.separationMode !== 'flowers-foliage' || !flowerMaskStrokes?.length || !image.naturalWidth || !image.naturalHeight) {
+        return
+      }
+      const imageAspect = image.naturalWidth / image.naturalHeight
+      const boxAspect = width / height
+      let drawWidth = width
+      let drawHeight = height
+      let offsetX = 0
+      let offsetY = 0
+      if (imageAspect > boxAspect) {
+        drawHeight = drawWidth / imageAspect
+        offsetY = (height - drawHeight) / 2
+      } else {
+        drawWidth = drawHeight * imageAspect
+        offsetX = (width - drawWidth) / 2
+      }
+      flowerMaskStrokes.forEach((stroke) => {
+        const x = offsetX + Number(stroke?.x || 0) * drawWidth
+        const y = offsetY + Number(stroke?.y || 0) * drawHeight
+        const radius = Math.max(4, ((Number(stroke?.size || 0.04) * Math.max(drawWidth, drawHeight)) / 2))
+        ctx.fillStyle = stroke?.mode === 'erase' ? 'rgba(255,255,255,0.9)' : 'rgba(235, 108, 156, 0.32)'
+        ctx.beginPath()
+        ctx.arc(x, y, radius, 0, Math.PI * 2)
+        ctx.fill()
+      })
+    }
+    redraw()
+    const handle = window.requestAnimationFrame(redraw)
+    window.addEventListener('resize', redraw)
+    return () => {
+      window.cancelAnimationFrame(handle)
+      window.removeEventListener('resize', redraw)
+    }
+  }, [flowerMaskStrokes, stencilSettings.separationMode, stencilImagePreviewUrl])
+
   function HelpTip({ text }) {
     const [open, setOpen] = useState(false)
     return (
@@ -4725,6 +4851,73 @@ function StencilStudioPanel({
     } catch {
       // User canceled eyedropper; no action needed.
     }
+  }
+
+  function getDisplayedImagePoint(event, image) {
+    const bounds = image.getBoundingClientRect()
+    if (!bounds.width || !bounds.height || !image.naturalWidth || !image.naturalHeight) return null
+    const point = getPointerPoint(event)
+    const localX = point.clientX - bounds.left
+    const localY = point.clientY - bounds.top
+    const imageAspect = image.naturalWidth / image.naturalHeight
+    const boxAspect = bounds.width / bounds.height
+    let drawWidth = bounds.width
+    let drawHeight = bounds.height
+    let offsetX = 0
+    let offsetY = 0
+    if (imageAspect > boxAspect) {
+      drawHeight = drawWidth / imageAspect
+      offsetY = (bounds.height - drawHeight) / 2
+    } else {
+      drawWidth = drawHeight * imageAspect
+      offsetX = (bounds.width - drawWidth) / 2
+    }
+    if (
+      localX < offsetX ||
+      localY < offsetY ||
+      localX > offsetX + drawWidth ||
+      localY > offsetY + drawHeight
+    ) {
+      return null
+    }
+    return {
+      x: (localX - offsetX) / drawWidth,
+      y: (localY - offsetY) / drawHeight,
+      drawWidth,
+      drawHeight,
+    }
+  }
+
+  function applyFlowerMaskStroke(event) {
+    const image = previewImageRef.current
+    if (!image || !onAddFlowerMaskStroke) return
+    const point = getDisplayedImagePoint(event, image)
+    if (!point) return
+    const normalizedSize = Math.max(0.01, Math.min(0.18, maskBrushSize / Math.max(point.drawWidth, point.drawHeight)))
+    onAddFlowerMaskStroke({
+      x: point.x,
+      y: point.y,
+      size: normalizedSize,
+      mode: maskTool,
+    })
+  }
+
+  function handleMaskPointerDown(event) {
+    if (stencilSettings.separationMode !== 'flowers-foliage') return
+    if (event.button !== undefined && event.button !== 0) return
+    event.preventDefault()
+    setIsMaskPainting(true)
+    applyFlowerMaskStroke(event)
+  }
+
+  function handleMaskPointerMove(event) {
+    if (!isMaskPainting) return
+    event.preventDefault()
+    applyFlowerMaskStroke(event)
+  }
+
+  function handleMaskPointerEnd() {
+    setIsMaskPainting(false)
   }
 
   return (
@@ -4897,6 +5090,77 @@ function StencilStudioPanel({
                   </>
                 ) : null}
               </div>
+
+              {(isAutoGenerator || isTraceGenerator) ? (
+                <div className="rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
+                  <div className="mb-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Separation</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-[#8b7b6b]">
+                      Choose whether to split the whole design together or separate flowers from foliage first.
+                    </p>
+                  </div>
+                  <select
+                    value={stencilSettings.separationMode || 'whole'}
+                    onChange={(e) => onUpdateSetting('separationMode', e.target.value)}
+                    className="w-full rounded-md border border-[#d9cfc4] bg-white px-3 py-2 text-sm text-[#5e4a7f]"
+                  >
+                    <option value="whole">Whole Artwork</option>
+                    <option value="flowers-foliage">Flowers + Foliage</option>
+                  </select>
+                </div>
+              ) : null}
+
+              {(isAutoGenerator || isTraceGenerator) && stencilSettings.separationMode === 'flowers-foliage' ? (
+                <div className="rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
+                  <div className="mb-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Mark Flower Areas</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-[#8b7b6b]">
+                      Brush broadly over the flowers. Anything left unmarked will be treated as foliage or support shapes.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMaskTool('paint')}
+                      className={`rounded-md border px-3 py-1.5 text-[11px] font-semibold ${
+                        maskTool === 'paint' ? 'border-[#9c82c0] bg-white text-[#4f3e6b]' : 'border-[#d7c7ee] bg-[#fcf9ff] text-[#6b5b4f]'
+                      }`}
+                    >
+                      Paint Flowers
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMaskTool('erase')}
+                      className={`rounded-md border px-3 py-1.5 text-[11px] font-semibold ${
+                        maskTool === 'erase' ? 'border-[#9c82c0] bg-white text-[#4f3e6b]' : 'border-[#d7c7ee] bg-[#fcf9ff] text-[#6b5b4f]'
+                      }`}
+                    >
+                      Erase
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onResetFlowerMask}
+                      className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-[11px] font-semibold text-[#5e4a7f] hover:bg-[#f6f0ff]"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                  <div className="mt-3">
+                    <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                      <span>Brush Size ({maskBrushSize}px)</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={8}
+                      max={42}
+                      step={2}
+                      value={maskBrushSize}
+                      onChange={(e) => setMaskBrushSize(Number(e.target.value))}
+                      className="w-full accent-[#9678b8]"
+                    />
+                  </div>
+                </div>
+              ) : null}
 
               {(isAutoGenerator || isTraceGenerator) ? (
                 <div className="rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
@@ -5656,9 +5920,15 @@ function StencilStudioPanel({
               {useImageGenerator && stencilImagePreviewUrl ? (
                 <div
                   className="relative h-[280px] w-full overflow-hidden rounded-lg border border-[#eee5db] bg-white"
+                  onPointerDown={handleMaskPointerDown}
+                  onPointerMove={handleMaskPointerMove}
+                  onPointerUp={handleMaskPointerEnd}
+                  onPointerCancel={handleMaskPointerEnd}
+                  onPointerLeave={handleMaskPointerEnd}
                   onMouseMove={handleCornerDrag}
                   onMouseUp={() => setDragCorner(null)}
                   onMouseLeave={() => setDragCorner(null)}
+                  style={{ touchAction: stencilSettings.separationMode === 'flowers-foliage' ? 'none' : 'auto' }}
                 >
                   <img
                     ref={previewImageRef}
@@ -5667,6 +5937,12 @@ function StencilStudioPanel({
                     onClick={handlePreviewPickClick}
                     className={`h-full w-full object-contain ${pendingSplitColorField ? 'cursor-crosshair' : ''}`}
                   />
+                  {stencilSettings.separationMode === 'flowers-foliage' ? (
+                    <canvas
+                      ref={previewMaskCanvasRef}
+                      className="pointer-events-none absolute inset-0 h-full w-full"
+                    />
+                  ) : null}
                   {stencilRectifyEnabled ? (
                     <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
                       <polygon
@@ -6416,6 +6692,7 @@ function App() {
   const [stencilImageFile, setStencilImageFile] = useState(null)
   const [stencilImagePreviewUrl, setStencilImagePreviewUrl] = useState('')
   const [stencilSourceDataUrl, setStencilSourceDataUrl] = useState('')
+  const [flowerMaskStrokes, setFlowerMaskStrokes] = useState([])
   const [stencilProcessedPreviewUrl, setStencilProcessedPreviewUrl] = useState('')
   const [stencilSvg, setStencilSvg] = useState('')
   const [stencilLayers, setStencilLayers] = useState([])
@@ -6456,6 +6733,7 @@ function App() {
     traceExcludedColors: [],
     removeBackground: true,
     backgroundTolerance: 26,
+    separationMode: 'whole',
   })
 
   useEffect(() => {
@@ -6906,6 +7184,7 @@ function App() {
     setStencilLayerEditHistory({})
     setStencilLayerOriginals({})
     setStencilSettings((prev) => ({ ...prev, traceExcludedColors: [] }))
+    setFlowerMaskStrokes([])
     setStencilSourceDataUrl('')
     setStencilStraightenAngle(0)
     setStencilRectifyCorners(DEFAULT_RECTIFY_CORNERS)
@@ -6973,6 +7252,9 @@ function App() {
       if (field === 'backgroundTolerance') {
         const numeric = Number(value)
         next.backgroundTolerance = Math.max(8, Math.min(90, Number.isFinite(numeric) ? numeric : 26))
+      }
+      if (field === 'separationMode') {
+        next.separationMode = value === 'flowers-foliage' ? 'flowers-foliage' : 'whole'
       }
       return next
     })
@@ -7085,24 +7367,66 @@ function App() {
           ),
         )
       } else if (generatorType === 'auto') {
-        const posterizedLayers = createPosterizedStencilLayers(image, {
-          ...stencilSettings,
-          colorSegmentation: true,
-          noiseFilter: stencilSettings.noiseFilter,
-          rotationDeg,
-          rectifyEnabled: stencilRectifyEnabled,
-          rectifyCorners: stencilRectifyCorners,
-        })
-        const layerSvgs = posterizedLayers.map((layer) => {
+        let posterizedLayers = []
+        if (stencilSettings.separationMode === 'flowers-foliage' && flowerMaskStrokes.length > 0) {
+          const rendered = renderImageToCanvas(image, { maxDim: 1200, rotationDeg })
+          const baseCanvas = stencilRectifyEnabled
+            ? rectifyCanvasFromCorners(rendered.canvas, stencilRectifyCorners)
+            : rendered.canvas
+          const flowerMask = buildMaskFromNormalizedStrokes(baseCanvas.width, baseCanvas.height, flowerMaskStrokes)
+          const flowerCanvas = applySubjectMaskToCanvas(baseCanvas, flowerMask, { keepInside: true })
+          const foliageCanvas = applySubjectMaskToCanvas(baseCanvas, flowerMask, { keepInside: false })
+          const flowerImage = await loadImageFromUrl(flowerCanvas.toDataURL('image/png'))
+          const foliageImage = await loadImageFromUrl(foliageCanvas.toDataURL('image/png'))
+          const flowerLayerCount = Math.max(1, Number(stencilSettings.layerCount || 3))
+          const foliageLayerCount = flowerLayerCount >= 3 ? 2 : 1
+          const flowerLayers = createPosterizedStencilLayers(flowerImage, {
+            ...stencilSettings,
+            layerCount: flowerLayerCount,
+            colorSegmentation: false,
+            noiseFilter: stencilSettings.noiseFilter,
+            rotationDeg: 0,
+            rectifyEnabled: false,
+          }).map((layer) => ({ ...layer, subjectGroup: 'flower' }))
+          const foliageLayers = createPosterizedStencilLayers(foliageImage, {
+            ...stencilSettings,
+            layerCount: foliageLayerCount,
+            colorSegmentation: false,
+            noiseFilter: stencilSettings.noiseFilter,
+            rotationDeg: 0,
+            rectifyEnabled: false,
+          }).map((layer) => ({ ...layer, subjectGroup: 'foliage' }))
+          posterizedLayers = [...flowerLayers, ...foliageLayers]
+        } else {
+          posterizedLayers = createPosterizedStencilLayers(image, {
+            ...stencilSettings,
+            colorSegmentation: false,
+            noiseFilter: stencilSettings.noiseFilter,
+            rotationDeg,
+            rectifyEnabled: stencilRectifyEnabled,
+            rectifyCorners: stencilRectifyCorners,
+          })
+        }
+        const flowerLayersCount = posterizedLayers.filter((entry) => entry.subjectGroup === 'flower').length
+        const foliageLayersCount = posterizedLayers.filter((entry) => entry.subjectGroup === 'foliage').length
+        const layerSvgs = posterizedLayers.map((layer, mappedIndex) => {
           const rawSvg = buildStencilSvg(layer.imageData, stencilSettings)
           const svg = wrapSvgForStencilCanvas(rawSvg, {
             paperSize: stencilSettings.paperSize,
             orientation: stencilSettings.orientation,
             mode: 'multi',
           })
+          const name =
+            layer.subjectGroup === 'flower'
+              ? flowerMaskStrokes.length && stencilSettings.separationMode === 'flowers-foliage'
+                ? flowerLayerCountLabel(mappedIndex, layer.index, flowerLayersCount)
+                : `Layer ${mappedIndex + 1}`
+              : layer.subjectGroup === 'foliage'
+              ? foliageLayerCountLabel(layer.index, foliageLayersCount)
+              : `Layer ${mappedIndex + 1}`
           return {
-            index: layer.index,
-            name: `Layer ${layer.index + 1}`,
+            index: mappedIndex,
+            name,
             hint: layer.hint || `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`,
             cutoffLow: layer.cutoffLow,
             cutoffHigh: layer.cutoffHigh,
@@ -8764,6 +9088,7 @@ function App() {
         <StencilStudioPanel
           stencilImageFile={stencilImageFile}
           stencilImagePreviewUrl={stencilImagePreviewUrl}
+          flowerMaskStrokes={flowerMaskStrokes}
           stencilProcessedPreviewUrl={stencilProcessedPreviewUrl}
           stencilSvg={stencilSvg}
           stencilLayers={stencilLayers}
@@ -8778,6 +9103,8 @@ function App() {
           onImageChange={(file) => void handleStencilImageFileChange(file)}
           onUpdateSetting={updateStencilSetting}
           onGenerate={() => void generateStencilFromImage()}
+          onAddFlowerMaskStroke={(stroke) => setFlowerMaskStrokes((prev) => [...prev, stroke])}
+          onResetFlowerMask={() => setFlowerMaskStrokes([])}
           onDownloadSvg={downloadStencilSvg}
           onDownloadLayerSvg={downloadStencilLayerSvg}
           onDownloadAllLayers={downloadAllStencilLayerSvgs}
