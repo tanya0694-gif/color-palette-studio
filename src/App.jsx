@@ -3125,20 +3125,38 @@ function mergeTraceLayersToIllustrationSegments(layers = [], targetCount = 6) {
       return b.pixelCount - a.pixelCount
     })
     .map((group) => {
+      const lightnessValues = group.layers
+        .map((layer) => hexToHsl(layer.colorHex)?.l)
+        .filter((value) => Number.isFinite(value))
+      const minLightness = lightnessValues.length ? Math.min(...lightnessValues) : 50
+      const maxLightness = lightnessValues.length ? Math.max(...lightnessValues) : 50
+      const lightnessSpread = maxLightness - minLightness
       const maxBuckets =
         group.family === 'purple'
-          ? Math.min(3, group.layers.length)
+          ? Math.min(lightnessSpread >= 12 ? 3 : 2, group.layers.length)
           : group.family === 'green'
-          ? Math.min(2, group.layers.length)
+          ? Math.min(lightnessSpread >= 12 ? 3 : 2, group.layers.length)
           : group.family === 'pink'
-          ? Math.min(2, group.layers.length)
+          ? Math.min(lightnessSpread >= 10 ? 2 : 1, group.layers.length)
           : group.family === 'yellow'
-          ? Math.min(group.layers.length >= 2 ? 2 : 1, group.layers.length)
+          ? Math.min(lightnessSpread >= 8 ? 2 : 1, group.layers.length)
+          : 1
+      const minBuckets =
+        group.family === 'purple'
+          ? Math.min(maxBuckets, desired >= 5 && lightnessSpread >= 10 ? 2 : 1)
+          : group.family === 'green'
+          ? Math.min(maxBuckets, desired >= 6 && lightnessSpread >= 10 ? 2 : 1)
+          : group.family === 'pink'
+          ? Math.min(maxBuckets, desired >= 7 && lightnessSpread >= 10 ? 1 : 1)
+          : group.family === 'yellow'
+          ? 1
           : 1
       return {
         ...group,
+        lightnessSpread,
         maxBuckets: Math.max(1, maxBuckets),
         bucketCount: Math.max(1, maxBuckets),
+        minBuckets: Math.max(1, minBuckets),
       }
     })
 
@@ -3156,7 +3174,7 @@ function mergeTraceLayersToIllustrationSegments(layers = [], targetCount = 6) {
   const reductionOrder = ['other', 'neutral', 'orange', 'yellow', 'blue', 'pink', 'green', 'purple']
   while (plannedCount > desired) {
     const reducible = familyPlans
-      .filter((group) => group.bucketCount > 1)
+      .filter((group) => group.bucketCount > Math.max(1, group.minBuckets || 1))
       .sort((a, b) => reductionOrder.indexOf(a.family) - reductionOrder.indexOf(b.family))
     if (!reducible.length) break
     reducible[0].bucketCount -= 1
@@ -4559,9 +4577,9 @@ function StencilStudioPanel({
   const segmentLayerMode =
     Number(stencilSettings.layerCount) <= 1
       ? 'outline'
-      : Number(stencilSettings.layerCount) <= 4
+      : Number(stencilSettings.layerCount) <= 5
       ? 'simple'
-      : Number(stencilSettings.layerCount) <= 6
+      : Number(stencilSettings.layerCount) <= 7
       ? 'balanced'
       : 'detailed'
 
@@ -4608,9 +4626,9 @@ function StencilStudioPanel({
   function applySegmentLayerPreset(mode) {
     const layerCountByMode = {
       outline: 1,
-      simple: 4,
-      balanced: 6,
-      detailed: 8,
+      simple: 5,
+      balanced: 7,
+      detailed: 9,
     }
     onUpdateSetting('generatorType', 'auto')
     onUpdateSetting('layerCount', layerCountByMode[mode] || 3)
