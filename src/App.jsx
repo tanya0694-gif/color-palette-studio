@@ -3042,6 +3042,172 @@ function mergeTraceLayersToTargetCount(layers = [], targetCount = 1) {
     .map((layer, index) => ({ ...layer, index }))
 }
 
+function getTraceColorFamily(hex = '#7E86C2') {
+  const hsl = hexToHsl(hex) || { h: 0, s: 0, l: 50 }
+  if (hsl.s < 14) return 'neutral'
+  if (hsl.h >= 75 && hsl.h <= 170) return 'green'
+  if (hsl.h >= 245 && hsl.h <= 320) return 'purple'
+  if (hsl.h >= 38 && hsl.h <= 74) return 'yellow'
+  if (hsl.h >= 20 && hsl.h < 38) return 'orange'
+  if (hsl.h >= 320 || hsl.h <= 20) return 'pink'
+  if (hsl.h >= 190 && hsl.h < 245) return 'blue'
+  return 'other'
+}
+
+function getIllustrationSegmentLabel(family, tone, bucketCount) {
+  const familyLabel =
+    family === 'green'
+      ? 'Green'
+      : family === 'purple'
+      ? 'Purple'
+      : family === 'pink'
+      ? 'Pink'
+      : family === 'yellow'
+      ? 'Yellow'
+      : family === 'orange'
+      ? 'Warm'
+      : family === 'blue'
+      ? 'Blue'
+      : family === 'neutral'
+      ? 'Support'
+      : 'Details'
+
+  if (family === 'neutral' || family === 'other') {
+    return bucketCount > 1 ? `${tone === 'light' ? 'Light' : 'Dark'} ${familyLabel}` : familyLabel
+  }
+  if (bucketCount <= 1) return familyLabel
+  return `${tone.charAt(0).toUpperCase()}${tone.slice(1)} ${familyLabel}`
+}
+
+function mergeTraceLayersToIllustrationSegments(layers = [], targetCount = 6) {
+  const desired = Math.max(1, Math.min(15, Math.round(targetCount || 6)))
+  const normalized = (Array.isArray(layers) ? layers : [])
+    .filter((layer) => layer?.imageData)
+    .map((layer, index) => ({
+      ...layer,
+      index,
+      pixelCount: Number.isFinite(layer?.pixelCount) ? Number(layer.pixelCount) : countFilledPixels(layer.imageData),
+    }))
+    .filter((layer) => layer.pixelCount > 0)
+
+  if (!normalized.length) return []
+
+  const totalPixels = Math.max(1, normalized.reduce((sum, layer) => sum + Math.max(0, layer.pixelCount), 0))
+  const grouped = new Map()
+  normalized.forEach((layer) => {
+    const family = getTraceColorFamily(layer.colorHex || '#7E86C2')
+    const current = grouped.get(family) || { family, layers: [], pixelCount: 0 }
+    current.layers.push(layer)
+    current.pixelCount += Math.max(0, layer.pixelCount)
+    grouped.set(family, current)
+  })
+
+  const importance = {
+    purple: 1,
+    pink: 2,
+    green: 3,
+    yellow: 4,
+    orange: 5,
+    blue: 6,
+    neutral: 7,
+    other: 8,
+  }
+  const familyPlans = [...grouped.values()]
+    .filter((group) => {
+      const share = group.pixelCount / totalPixels
+      if (group.family === 'purple' || group.family === 'green') return share >= 0.03
+      if (group.family === 'yellow' || group.family === 'pink') return share >= 0.01
+      return share >= 0.025
+    })
+    .sort((a, b) => {
+      const priority = (importance[a.family] || 99) - (importance[b.family] || 99)
+      if (priority !== 0) return priority
+      return b.pixelCount - a.pixelCount
+    })
+    .map((group) => {
+      const maxBuckets =
+        group.family === 'purple'
+          ? Math.min(3, group.layers.length)
+          : group.family === 'green'
+          ? Math.min(2, group.layers.length)
+          : group.family === 'pink'
+          ? Math.min(2, group.layers.length)
+          : group.family === 'yellow'
+          ? Math.min(group.layers.length >= 2 ? 2 : 1, group.layers.length)
+          : 1
+      return {
+        ...group,
+        maxBuckets: Math.max(1, maxBuckets),
+        bucketCount: Math.max(1, maxBuckets),
+      }
+    })
+
+  if (!familyPlans.length) {
+    return mergeTraceLayersToTargetCount(normalized, desired).map((layer, index) => ({
+      ...layer,
+      index,
+      name: `Segment ${index + 1}`,
+      hint: layer.hint || `Grouped trace segment ${index + 1}`,
+      previewUrl: imageDataToDataUrl(layer.imageData),
+    }))
+  }
+
+  let plannedCount = familyPlans.reduce((sum, group) => sum + group.bucketCount, 0)
+  const reductionOrder = ['other', 'neutral', 'orange', 'yellow', 'blue', 'pink', 'green', 'purple']
+  while (plannedCount > desired) {
+    const reducible = familyPlans
+      .filter((group) => group.bucketCount > 1)
+      .sort((a, b) => reductionOrder.indexOf(a.family) - reductionOrder.indexOf(b.family))
+    if (!reducible.length) break
+    reducible[0].bucketCount -= 1
+    plannedCount -= 1
+  }
+
+  const segments = []
+  familyPlans.forEach((group) => {
+    const sortedLayers = group.layers
+      .slice()
+      .sort((a, b) => (hexToHsl(b.colorHex)?.l ?? 50) - (hexToHsl(a.colorHex)?.l ?? 50))
+    const count = Math.min(group.bucketCount, sortedLayers.length)
+    const buckets = Array.from({ length: count }, () => [])
+    sortedLayers.forEach((layer, index) => {
+      const bucketIndex = Math.min(count - 1, Math.floor((index / Math.max(1, sortedLayers.length)) * count))
+      buckets[bucketIndex].push(layer)
+    })
+    const toneLabels = count === 1 ? ['base'] : count === 2 ? ['light', 'dark'] : ['light', 'mid', 'dark']
+    buckets.forEach((bucketLayers, bucketIndex) => {
+      if (!bucketLayers.length) return
+      const imageData = combineBinaryLayerImageData(bucketLayers)
+      if (!imageData) return
+      const pixelCount = countFilledPixels(imageData)
+      if (!pixelCount) return
+      const colorHex = averageColorFromLayers(bucketLayers)
+      const tone = toneLabels[Math.min(bucketIndex, toneLabels.length - 1)] || 'base'
+      segments.push({
+        index: segments.length,
+        imageData,
+        previewUrl: imageDataToDataUrl(imageData),
+        colorHex,
+        pixelCount,
+        segmentFamily: group.family,
+        segmentTone: tone,
+        name: getIllustrationSegmentLabel(group.family, tone, count),
+        hint: `Grouped from ${bucketLayers.length} trace ${bucketLayers.length === 1 ? 'cluster' : 'clusters'}`,
+      })
+    })
+  })
+
+  return segments
+    .sort((a, b) => {
+      const priority = (importance[a.segmentFamily] || 99) - (importance[b.segmentFamily] || 99)
+      if (priority !== 0) return priority
+      const toneOrder = { light: 0, mid: 1, dark: 2, base: 1 }
+      return (toneOrder[a.segmentTone] ?? 1) - (toneOrder[b.segmentTone] ?? 1)
+    })
+    .slice(0, desired)
+    .map((layer, index) => ({ ...layer, index }))
+}
+
 function getSvgViewBox(svgElement) {
   const rawViewBox = String(svgElement?.getAttribute('viewBox') || '').trim()
   if (rawViewBox) {
@@ -4390,14 +4556,14 @@ function StencilStudioPanel({
       })
     : []
   const detectedTraceCount = filteredDetectedTraceColors.length
-  const toneLayerMode =
+  const segmentLayerMode =
     Number(stencilSettings.layerCount) <= 1
       ? 'outline'
-      : Number(stencilSettings.layerCount) === 2
-      ? '2tone'
-      : Number(stencilSettings.layerCount) === 3
-      ? '3tone'
-      : '4tone'
+      : Number(stencilSettings.layerCount) <= 4
+      ? 'simple'
+      : Number(stencilSettings.layerCount) <= 6
+      ? 'balanced'
+      : 'detailed'
 
   function applySimplifyPreset(preset) {
     const presets = {
@@ -4439,12 +4605,12 @@ function StencilStudioPanel({
     Object.entries(next).forEach(([field, value]) => onUpdateSetting(field, value))
   }
 
-  function applyToneLayerPreset(mode) {
+  function applySegmentLayerPreset(mode) {
     const layerCountByMode = {
       outline: 1,
-      '2tone': 2,
-      '3tone': 3,
-      '4tone': 4,
+      simple: 4,
+      balanced: 6,
+      detailed: 8,
     }
     onUpdateSetting('generatorType', 'auto')
     onUpdateSetting('layerCount', layerCountByMode[mode] || 3)
@@ -4928,7 +5094,7 @@ function StencilStudioPanel({
             <h2 className="font-display text-2xl font-semibold text-[#3f3254] md:text-3xl">Stencil Studio</h2>
             <p className="text-sm text-[#7f7468]">
               {isAutoGenerator
-                ? 'Upload flat or semi-flat artwork, simplify it, then generate stencil-ready tone layers for Cricut.'
+                ? 'Upload flat or semi-flat artwork, clean it up, then generate stencil-ready shape segments for Cricut.'
                 : isTraceGenerator
                 ? 'Advanced trace mode for color-cluster extraction when you need more manual control.'
                 : 'Legacy image tracing controls (advanced/tuning mode).'}
@@ -4941,7 +5107,7 @@ function StencilStudioPanel({
               disabled={(useImageGenerator && !stencilImageFile) || stencilBusy}
               className="rounded-lg border border-[#8e72b5] bg-gradient-to-r from-[#b39ad6] to-[#9f84c5] px-4 py-2 text-sm font-semibold text-[#302442] shadow-sm hover:from-[#a88fd0] hover:to-[#9577bd] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {stencilBusy ? 'Vectorizing...' : 'Generate Stencil'}
+              {stencilBusy ? 'Vectorizing...' : isAutoGenerator ? 'Generate Segments' : 'Generate Stencil'}
             </button>
             <button
               type="button"
@@ -5094,80 +5260,9 @@ function StencilStudioPanel({
               {(isAutoGenerator || isTraceGenerator) ? (
                 <div className="rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
                   <div className="mb-2">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Separation</p>
-                    <p className="mt-1 text-[11px] leading-relaxed text-[#8b7b6b]">
-                      Choose whether to split the whole design together or separate flowers from foliage first.
-                    </p>
-                  </div>
-                  <select
-                    value={stencilSettings.separationMode || 'whole'}
-                    onChange={(e) => onUpdateSetting('separationMode', e.target.value)}
-                    className="w-full rounded-md border border-[#d9cfc4] bg-white px-3 py-2 text-sm text-[#5e4a7f]"
-                  >
-                    <option value="whole">Whole Artwork</option>
-                    <option value="flowers-foliage">Flowers + Foliage</option>
-                  </select>
-                </div>
-              ) : null}
-
-              {(isAutoGenerator || isTraceGenerator) && stencilSettings.separationMode === 'flowers-foliage' ? (
-                <div className="rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
-                  <div className="mb-2">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Mark Flower Areas</p>
-                    <p className="mt-1 text-[11px] leading-relaxed text-[#8b7b6b]">
-                      Brush broadly over the flowers. Anything left unmarked will be treated as foliage or support shapes.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setMaskTool('paint')}
-                      className={`rounded-md border px-3 py-1.5 text-[11px] font-semibold ${
-                        maskTool === 'paint' ? 'border-[#9c82c0] bg-white text-[#4f3e6b]' : 'border-[#d7c7ee] bg-[#fcf9ff] text-[#6b5b4f]'
-                      }`}
-                    >
-                      Paint Flowers
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setMaskTool('erase')}
-                      className={`rounded-md border px-3 py-1.5 text-[11px] font-semibold ${
-                        maskTool === 'erase' ? 'border-[#9c82c0] bg-white text-[#4f3e6b]' : 'border-[#d7c7ee] bg-[#fcf9ff] text-[#6b5b4f]'
-                      }`}
-                    >
-                      Erase
-                    </button>
-                    <button
-                      type="button"
-                      onClick={onResetFlowerMask}
-                      className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-[11px] font-semibold text-[#5e4a7f] hover:bg-[#f6f0ff]"
-                    >
-                      Reset
-                    </button>
-                  </div>
-                  <div className="mt-3">
-                    <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                      <span>Brush Size ({maskBrushSize}px)</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={8}
-                      max={42}
-                      step={2}
-                      value={maskBrushSize}
-                      onChange={(e) => setMaskBrushSize(Number(e.target.value))}
-                      className="w-full accent-[#9678b8]"
-                    />
-                  </div>
-                </div>
-              ) : null}
-
-              {(isAutoGenerator || isTraceGenerator) ? (
-                <div className="rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
-                  <div className="mb-2">
                     <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Simplify Artwork</p>
                     <p className="mt-1 text-[11px] leading-relaxed text-[#8b7b6b]">
-                      Clean the source before building stencil layers.
+                      Clean the source before splitting it into stencil-ready segments.
                     </p>
                   </div>
                   <select
@@ -5578,20 +5673,20 @@ function StencilStudioPanel({
               {((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi')) ? (
                 <div className="rounded-lg border border-[#d7c7ee] bg-[#f7f2fc] p-3">
                   <div className="mb-2">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Stencil Layers</p>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Segments</p>
                     <p className="mt-1 text-[11px] leading-relaxed text-[#8b7b6b]">
-                      Split the cleaned artwork by light, mid, and dark shapes.
+                      Group the illustration into a few clean stencil-ready shape families.
                     </p>
                   </div>
                   <select
-                    value={toneLayerMode}
-                    onChange={(e) => applyToneLayerPreset(e.target.value)}
+                    value={segmentLayerMode}
+                    onChange={(e) => applySegmentLayerPreset(e.target.value)}
                     className="w-full rounded-md border border-[#d9cfc4] bg-white px-3 py-2 text-sm text-[#5e4a7f]"
                   >
                     <option value="outline">Outline</option>
-                    <option value="2tone">2 Tone</option>
-                    <option value="3tone">3 Tone</option>
-                    <option value="4tone">4 Tone</option>
+                    <option value="simple">Simple Segments</option>
+                    <option value="balanced">Balanced Segments</option>
+                    <option value="detailed">Detailed Segments</option>
                   </select>
                 </div>
               ) : null}
@@ -5599,8 +5694,8 @@ function StencilStudioPanel({
               {showAdvancedGenerator && (((isAutoGenerator || isTraceGenerator) || (isLegacyGenerator && stencilSettings.mode === 'multi'))) ? (
                 <div>
                   <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
-                    <span>Layer Count ({stencilSettings.layerCount})</span>
-                    <HelpTip text="Number of tonal stencil layers. Outline is 1, most artwork works best at 3 or 4." />
+                    <span>Segment Count ({stencilSettings.layerCount})</span>
+                    <HelpTip text="Higher counts keep more separate illustration groups. Most flat floral artwork works best around 4 to 8." />
                   </div>
                   <div className="mb-2 flex items-center gap-2">
                     <button
@@ -6012,7 +6107,7 @@ function StencilStudioPanel({
                   Clear Focus ({focusedLayer.name || `Layer ${focusedLayer.index + 1}`})
                 </button>
               ) : null}
-              {stencilLayers.length >= 3 ? (
+              {!isAutoGenerator && stencilLayers.length >= 3 ? (
                 <label className="flex items-center gap-1 rounded-md border border-[#d7c7ee] bg-[#f4eefc] px-2 py-1">
                   <span className="text-[10px] font-semibold text-[#5f5276]">Focus</span>
                   <select
@@ -6109,7 +6204,7 @@ function StencilStudioPanel({
                       : 'Flower Dark'
                   } focus preview.`
                 : normalizedGenerator === 'auto'
-                ? `${stencilLayers.length} auto-separated layers generated.`
+                ? `${stencilLayers.length} illustration segments generated.`
                 : normalizedGenerator === 'trace'
                 ? `${stencilLayers.length} trace-style color layers generated.`
                 : stencilSettings.mode === 'pattern'
@@ -6251,7 +6346,7 @@ function StencilStudioPanel({
             </div>
           ) : (
             <div className="flex h-[420px] items-center justify-center rounded-lg border border-dashed border-[#ddd0c1] bg-[#faf7f4] text-sm text-[#8b7b6b]">
-              Click Generate Stencil to create vectors.
+              Click Generate Segments to create vectors.
             </div>
           )}
           {stencilError ? <p className="mt-3 text-sm text-red-600">{stencilError}</p> : null}
@@ -6261,7 +6356,9 @@ function StencilStudioPanel({
           <div className="mt-4 rounded-xl border border-[#d7c7ee] bg-[#fcf9ff] p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">Generated Layers</p>
+                <p className="text-xs font-semibold uppercase tracking-wider text-[#8b7b6b]">
+                  {isAutoGenerator ? 'Generated Segments' : 'Generated Layers'}
+                </p>
                 <p className="mt-1 text-[11px] text-[#8b7b6b]">
                   Download mode: <span className="font-semibold text-[#5f5276]">{exportModeLabel}</span>{' '}
                   {isAutoGenerator ? (
@@ -6300,14 +6397,16 @@ function StencilStudioPanel({
                 >
                   Combine Selected Layers ({selectedLayerKeys.length})
                 </button>
-                <button
-                  type="button"
-                  onClick={() => onAutoGroupByTone?.(toneOverrides)}
-                  disabled={stencilLayers.length < 3}
-                  className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Auto Group To Flower + Foliage Tone Plates
-                </button>
+                {!isAutoGenerator ? (
+                  <button
+                    type="button"
+                    onClick={() => onAutoGroupByTone?.(toneOverrides)}
+                    disabled={stencilLayers.length < 3}
+                    className="rounded-md border border-[#d7c7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5e4a7f] hover:bg-[#f5effd] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Auto Group To Flower + Foliage Tone Plates
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => setSelectedLayerKeys([])}
@@ -6338,7 +6437,7 @@ function StencilStudioPanel({
                     <span>Select to combine</span>
                   </label>
                   <p className="text-sm font-medium text-[#5c4a3d]">{layer.name || `Layer ${layer.index + 1}`}</p>
-                  <p className="mb-2 text-xs text-[#8b7b6b]">{layer.hint || `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`}</p>
+                  <p className="mb-2 text-xs text-[#8b7b6b]">{layer.hint || `Segment ${orderIndex + 1}`}</p>
                   {layer.svg ? (
                     <div
                       className="mb-2 h-36 w-full overflow-hidden rounded-md border border-[#eee5db] bg-white p-1 [&_svg]:h-full [&_svg]:w-full [&_svg]:max-h-full [&_svg]:max-w-full [&_svg]:!overflow-visible"
@@ -6371,30 +6470,32 @@ function StencilStudioPanel({
                     />
                     <span className="text-[11px] text-[#7f7468]">{layer.colorHex || '#7E86C2'}</span>
                   </div>
-                  <label className="mb-2 block text-[11px] text-[#6b5b4f]">
-                    Tone Group
-                    <select
-                      value={toneOverrides[String(layer.index)] || ''}
-                      onChange={(e) =>
-                        setToneOverrides((prev) => {
-                          const key = String(layer.index)
-                          const next = { ...prev }
-                          const value = String(e.target.value || '')
-                          if (!value) delete next[key]
-                          else next[key] = value
-                          return next
-                        })
-                      }
-                      className="mt-1 h-8 w-full rounded border border-[#d9cfc4] bg-white px-2 text-[11px] text-[#5f5276]"
-                    >
-                      <option value="">Auto</option>
-                      <option value="light">Flower Light</option>
-                      <option value="mid">Flower Mid</option>
-                      <option value="dark">Flower Dark</option>
-                      <option value="foliageLight">Foliage Light</option>
-                      <option value="foliageDark">Foliage Dark</option>
-                    </select>
-                  </label>
+                  {!isAutoGenerator ? (
+                    <label className="mb-2 block text-[11px] text-[#6b5b4f]">
+                      Tone Group
+                      <select
+                        value={toneOverrides[String(layer.index)] || ''}
+                        onChange={(e) =>
+                          setToneOverrides((prev) => {
+                            const key = String(layer.index)
+                            const next = { ...prev }
+                            const value = String(e.target.value || '')
+                            if (!value) delete next[key]
+                            else next[key] = value
+                            return next
+                          })
+                        }
+                        className="mt-1 h-8 w-full rounded border border-[#d9cfc4] bg-white px-2 text-[11px] text-[#5f5276]"
+                      >
+                        <option value="">Auto</option>
+                        <option value="light">Flower Light</option>
+                        <option value="mid">Flower Mid</option>
+                        <option value="dark">Flower Dark</option>
+                        <option value="foliageLight">Foliage Light</option>
+                        <option value="foliageDark">Foliage Dark</option>
+                      </select>
+                    </label>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => onDownloadLayerSvg(layer, orderIndex + 1)}
@@ -6458,7 +6559,7 @@ function StencilStudioPanel({
                     <p className="truncate text-sm font-medium text-[#5c4a3d]">{entry.name}</p>
                     <p className="text-xs text-[#8b7b6b]">
                       {(entry.settings?.generatorType || 'image') === 'auto'
-                          ? 'Auto Stencil Layers'
+                          ? 'Illustration Segments'
                         : (entry.settings?.generatorType || 'image') === 'trace'
                           ? 'Trace from Image'
                         : entry.mode === 'pattern'
@@ -7367,69 +7468,30 @@ function App() {
           ),
         )
       } else if (generatorType === 'auto') {
-        let posterizedLayers = []
-        if (stencilSettings.separationMode === 'flowers-foliage' && flowerMaskStrokes.length > 0) {
-          const rendered = renderImageToCanvas(image, { maxDim: 1200, rotationDeg })
-          const baseCanvas = stencilRectifyEnabled
-            ? rectifyCanvasFromCorners(rendered.canvas, stencilRectifyCorners)
-            : rendered.canvas
-          const flowerMask = buildMaskFromNormalizedStrokes(baseCanvas.width, baseCanvas.height, flowerMaskStrokes)
-          const flowerCanvas = applySubjectMaskToCanvas(baseCanvas, flowerMask, { keepInside: true })
-          const foliageCanvas = applySubjectMaskToCanvas(baseCanvas, flowerMask, { keepInside: false })
-          const flowerImage = await loadImageFromUrl(flowerCanvas.toDataURL('image/png'))
-          const foliageImage = await loadImageFromUrl(foliageCanvas.toDataURL('image/png'))
-          const flowerLayerCount = Math.max(1, Number(stencilSettings.layerCount || 3))
-          const foliageLayerCount = flowerLayerCount >= 3 ? 2 : 1
-          const flowerLayers = createPosterizedStencilLayers(flowerImage, {
-            ...stencilSettings,
-            layerCount: flowerLayerCount,
-            colorSegmentation: false,
-            noiseFilter: stencilSettings.noiseFilter,
-            rotationDeg: 0,
-            rectifyEnabled: false,
-          }).map((layer) => ({ ...layer, subjectGroup: 'flower' }))
-          const foliageLayers = createPosterizedStencilLayers(foliageImage, {
-            ...stencilSettings,
-            layerCount: foliageLayerCount,
-            colorSegmentation: false,
-            noiseFilter: stencilSettings.noiseFilter,
-            rotationDeg: 0,
-            rectifyEnabled: false,
-          }).map((layer) => ({ ...layer, subjectGroup: 'foliage' }))
-          posterizedLayers = [...flowerLayers, ...foliageLayers]
-        } else {
-          posterizedLayers = createPosterizedStencilLayers(image, {
-            ...stencilSettings,
-            colorSegmentation: false,
-            noiseFilter: stencilSettings.noiseFilter,
-            rotationDeg,
-            rectifyEnabled: stencilRectifyEnabled,
-            rectifyCorners: stencilRectifyCorners,
-          })
-        }
-        const flowerLayersCount = posterizedLayers.filter((entry) => entry.subjectGroup === 'flower').length
-        const foliageLayersCount = posterizedLayers.filter((entry) => entry.subjectGroup === 'foliage').length
-        const layerSvgs = posterizedLayers.map((layer, mappedIndex) => {
+        const desiredSegmentCount = Math.max(1, Math.min(15, Math.round(Number(stencilSettings.layerCount) || 6)))
+        const traceClusterSeedCount = Math.max(desiredSegmentCount + 3, Math.min(15, desiredSegmentCount * 2))
+        const rawTraceLayers = createTraceStyleStencilLayers(image, {
+          layerCount: traceClusterSeedCount,
+          detail: stencilSettings.detail,
+          noiseFilter: stencilSettings.noiseFilter,
+          rotationDeg,
+          rectifyEnabled: stencilRectifyEnabled,
+          rectifyCorners: stencilRectifyCorners,
+          removeBackground: Boolean(stencilSettings.removeBackground),
+          backgroundTolerance: Number(stencilSettings.backgroundTolerance || 26),
+        })
+        const segmentedLayers = mergeTraceLayersToIllustrationSegments(rawTraceLayers, desiredSegmentCount)
+        const layerSvgs = segmentedLayers.map((layer, mappedIndex) => {
           const rawSvg = buildStencilSvg(layer.imageData, stencilSettings)
           const svg = wrapSvgForStencilCanvas(rawSvg, {
             paperSize: stencilSettings.paperSize,
             orientation: stencilSettings.orientation,
             mode: 'multi',
           })
-          const name =
-            layer.subjectGroup === 'flower'
-              ? flowerMaskStrokes.length && stencilSettings.separationMode === 'flowers-foliage'
-                ? flowerLayerCountLabel(mappedIndex, layer.index, flowerLayersCount)
-                : `Layer ${mappedIndex + 1}`
-              : layer.subjectGroup === 'foliage'
-              ? foliageLayerCountLabel(layer.index, foliageLayersCount)
-              : `Layer ${mappedIndex + 1}`
           return {
             index: mappedIndex,
-            name,
-            hint: layer.hint || `Tone ${layer.cutoffLow}-${layer.cutoffHigh}`,
-            cutoffLow: layer.cutoffLow,
-            cutoffHigh: layer.cutoffHigh,
+            name: layer.name || `Segment ${mappedIndex + 1}`,
+            hint: layer.hint || `Grouped illustration segment ${mappedIndex + 1}`,
             previewUrl: layer.previewUrl,
             colorHex: layer.colorHex || '#7E86C2',
             imageData: layer.imageData,
@@ -7997,7 +8059,7 @@ function App() {
   }
 
   function getStencilModeLabel(mode, generatorType = 'image') {
-    if (generatorType === 'auto') return 'Auto Stencil Layers'
+    if (generatorType === 'auto') return 'Illustration Segments'
     if (generatorType === 'trace') return 'Trace from Image'
     if (mode === 'pattern') return 'Repeat Pattern Stencils'
     if (mode === 'multi') return 'Layered Image Stencils'
